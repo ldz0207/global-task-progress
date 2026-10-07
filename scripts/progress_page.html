@@ -1,0 +1,155 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>统一后台任务进度</title><style>
+:root{color-scheme:light;--ink:#24382e;--muted:#627267;--green:#196a4c;--line:#dbe4dd}*{box-sizing:border-box}
+body{font:16px/1.65 'Segoe UI','Microsoft YaHei',sans-serif;background:#f2f5f3;color:var(--ink);margin:0}main{max-width:1080px;margin:30px auto;padding:22px}
+h1{font-size:28px;margin:6px 0 10px}h2{font-size:20px;margin:0}p{margin:12px 0}a{color:var(--green)}small,.muted{color:var(--muted);font-size:13px}
+.eyebrow{font-size:13px;letter-spacing:.06em;color:var(--muted)}.headerline,.taskhead{display:flex;align-items:center;justify-content:space-between;gap:14px}.taskhead{align-items:flex-start}
+.live{font-size:13px;white-space:nowrap;color:var(--green)}.live:before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor;margin-right:8px}
+.overview{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0}.tile{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 18px}.tile span{display:block;font-size:13px;color:var(--muted)}.tile strong{font-size:27px;line-height:1.5;font-weight:650}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0 16px}button{font:inherit;font-size:14px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);padding:6px 13px;cursor:pointer}
+button[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:#fff}button:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid #8fbfaa;outline-offset:3px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;margin:16px 0}.badge{display:inline-block;font-size:12px;white-space:nowrap;padding:3px 9px;border-radius:6px;background:#ecf4ea;color:#276342}
+.badge.attention,.badge.paused{background:#fff2db;color:#815411}.badge.error,.badge.failed{background:#fbe8e5;color:#9d352a}.badge.cancelled,.badge.idle{background:#eff1ef;color:#627267}
+.statusline{background:#ecf4ea;border-radius:8px;padding:10px 14px;margin:16px 0 12px;font-size:14px}.statusline.attention,.statusline.paused{background:#fff7e8}.statusline.error,.statusline.failed{background:#fdf1ee}
+.countline{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:14px}.countline strong{font-size:20px;font-variant-numeric:tabular-nums}
+progress{display:block;width:100%;height:18px;border:0;border-radius:5px;overflow:hidden;appearance:none;background:#e9eeeb;margin:9px 0}progress::-webkit-progress-bar{background:#e9eeeb;border-radius:5px}progress::-webkit-progress-value{background:#438765;border-radius:5px}progress::-moz-progress-bar{background:#438765;border-radius:5px}
+.metrics{display:grid;grid-template-columns:1fr 1fr 1.25fr;gap:12px;margin:16px 0}.metrics div{border-left:2px solid #e4ece7;padding-left:12px}.metrics span{display:block;font-size:12px;color:var(--muted)}.metrics b{font-size:15px;font-weight:600}
+.message{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;color:#465b4d}.tablewrap{overflow-x:auto;margin-top:12px}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:10px 9px;border-bottom:1px solid #e6ece7;vertical-align:top}th{font-weight:600;color:var(--muted);font-size:12px;background:#f7faf8}
+td:first-child{min-width:135px}td:nth-child(2){min-width:126px;font-variant-numeric:tabular-nums}td:nth-child(3){min-width:118px}td:last-child{min-width:164px}td small{display:block;font-size:12px}
+.phasecount{font-size:12px;margin-top:16px;color:var(--muted)}.basis{border-top:1px solid #eef2ef;padding-top:10px;margin-bottom:0}
+.completed summary{padding:12px 3px;color:var(--muted);cursor:pointer;font-size:14px}footer{margin-top:24px;font-size:13px;color:var(--muted)}#connection.error{color:#9d352a}
+@media(max-width:700px){main{margin:12px auto;padding:16px}.card{padding:17px}.overview{grid-template-columns:repeat(2,1fr);gap:8px}.tile{padding:10px 14px}.metrics{grid-template-columns:1fr 1fr}.metrics div:last-child{grid-column:1/-1}.headerline{align-items:flex-start}h1{font-size:24px}.taskhead h2{font-size:18px}}
+
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.msg{white-space:pre-wrap}.small{font-size:13px;color:var(--muted)}.stages summary{font-size:13px;color:var(--green);cursor:pointer;margin-top:14px}.stages .tablewrap{margin-top:12px}[hidden]{display:none!important}#historyTasks>summary{color:var(--muted);padding:12px 3px;cursor:pointer}#error{background:#fdf1ee;padding:18px;border:1px solid #f0d5ce;border-radius:12px}
+.taskactions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}.pin{font-size:13px;white-space:nowrap}.taskhead h2{overflow-wrap:anywhere}.taskcontrols{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:20px 0}.taskcontrols select{font:inherit;font-size:14px;padding:7px 10px;color:var(--ink);border:1px solid var(--line);border-radius:8px;background:#fff}.taskcontrols label{font-size:14px}.taskcontrols select:focus-visible{outline:3px solid #8fbfaa;outline-offset:3px}.taskcontrols button:disabled{opacity:.5;cursor:default}@media(max-width:700px){.taskhead{flex-wrap:wrap}.taskactions{justify-content:flex-start}.taskcontrols select{max-width:100%}}
+</style></head><body><main><header><div class="eyebrow">本机后台任务 · 统一查看</div><div class="headerline"><h1>统一后台任务进度</h1><span class="live" id="connection" role="status">正在连接</span></div><p class="muted">固定入口 <a href="http://127.0.0.1:8790/">127.0.0.1:8790</a> · 每 2 秒自动刷新。关闭页面后，后台任务仍继续。</p></header>
+<section class="overview" aria-label="任务概况" id="overview"></section><div class="taskcontrols" aria-label="任务查看选项"><label for="taskSort">排序</label><select id="taskSort"><option value="updated">最近更新</option><option value="attention">需要关注优先</option><option value="progress">进度较少优先</option><option value="name">任务名称</option></select><button type="button" id="clearPins">取消全部置顶</button><span class="muted" id="pinHint" aria-live="polite">置顶任务优先</span></div><p id="error" role="status" hidden></p><div id="panels"><section aria-label="当前任务"><h2 id="currentTitle">当前任务</h2><div id="currentTasks"></div><p id="emptyCurrent">正在连接</p></section><details id="historyTasks" hidden><summary id="historySummary">历史任务</summary><div id="historyList"></div></details></div>
+<footer><p>复制、完整校验、发布及各项计算分别验收；当前阶段完成不代表整个任务完成。</p><p>速度来自有效进度记录。等待测量、已暂停、异常或超过 90 秒无更新时，停止估计剩余时间。</p><p id="stamp">等待首次刷新</p></footer></main><script>
+const el=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num=v=>v==null||v===''||!Number.isFinite(Number(v))?null:Number(v);
+const fmt=v=>num(v)==null?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:1});
+const labels={running:'进行中',complete:'已完成',attention:'需要核对',error:'异常',failed:'异常',paused:'已暂停',idle:'暂无任务',cancelled:'已取消'};
+const status=s=>Object.hasOwn(labels,s)?s:'attention';
+const label=s=>labels[status(s)];
+const stamp=s=>{if(!s)return '暂无更新';const d=new Date(s);return Number.isNaN(d.getTime())?'暂无更新':d.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+' 北京时间'};
+const duration=v=>{const s=num(v);if(s==null||s<0)return '等待速度测量';if(s===0)return '0 秒';if(s<60)return Math.ceil(s)+' 秒';if(s<3600)return Math.ceil(s/60)+' 分钟';return Math.floor(s/3600)+' 小时 '+Math.ceil(s%3600/60)+' 分钟'};
+const halted=s=>['paused','attention','failed','error','cancelled','idle'].includes(s);
+function rate(p){
+ const s=status(p.status),v=num(p.speed),unit=esc(p.unit||'项');
+ if(s==='attention')return '停止测量，需核对';if(s==='paused')return '已暂停';if(s==='failed'||s==='error')return '异常，暂不可测';if(s==='cancelled'||s==='idle')return '未在运行';
+ if(v==null)return s==='complete'?'未记录历史速度':'等待测量';if(v===0)return '0 '+unit+'/分钟';
+ return (v*60<.1?'&lt;0.1':fmt(v*60))+' '+unit+'/分钟';
+}
+function eta(p){
+ const s=status(p.status);if(s==='complete')return '已完成';if(s==='attention')return '停止估计，需核对进程';if(s==='paused')return '已暂停，恢复后重估';if(s==='failed'||s==='error')return '异常，暂不可估计';if(s==='cancelled'||s==='idle')return '未在运行';
+ if(num(p.total)>0&&num(p.done)>=num(p.total))return '当前阶段已完成';return duration(p.eta_seconds);
+}
+function pct(p){const t=num(p.total),d=num(p.done);return t===0&&d===0?100:t==null||t<0||d==null?null:Math.max(0,Math.min(100,d/t*100))}
+function count(p){return num(p.total)!=null&&num(p.total)>=0?fmt(p.done)+' / '+fmt(p.total)+' '+esc(p.unit||'项'):num(p.done)!=null?'已完成 '+fmt(p.done)+' '+esc(p.unit||'项')+' · 总量待确认':'尚无可核实计数'}
+function remaining(p){const d=num(p.done),t=num(p.total);return t!=null&&t>=0&&d!=null?fmt(Math.max(0,t-d))+' '+esc(p.unit||'项'):'—'}
+function bar(p){const n=pct(p);return n==null?'<small>总量待确认</small>':'<progress value="'+n+'" max="100" aria-label="'+esc(p.stage||'当前阶段')+'进度"></progress>'}
+function phases(p){const a=Array.isArray(p.stages)?p.stages:p.stages&&typeof p.stages==='object'?Object.values(p.stages):[];return a.filter(s=>s&&typeof s==='object').map(s=>({...s,historicalFailure:s.stage!==p.stage&&['failed','error'].includes(s.status),unit:s.unit||p.unit,status:['complete','failed','error','cancelled'].includes(s.status)?s.status:halted(status(p.status))?p.status:s.status||p.status}))}
+function row(p){return '<tr><td>'+esc(p.stage||'阶段')+'<small><span class="badge '+status(p.status)+'">'+(p.historicalFailure?'历史中断':label(p.status))+'</span></small>'+(p.historicalFailure?'<small>旧记录，非当前阶段</small>':'')+'</td><td>'+(p.historicalFailure?'中断时<br>':'')+count(p)+'</td><td>'+bar(p)+'<small>'+(pct(p)==null?'—':fmt(Number(pct(p).toFixed(1)))+'%')+'</small></td><td>'+remaining(p)+'</td><td>'+rate(p)+'<small>'+eta(p)+'</small></td></tr>'}
+function card(p){
+ const s=status(p.status),n=pct(p),a=phases(p);const id=String(p.task_id||p.title||''),isPinned=pinned.has(id);
+ return '<article class="card" data-task-id="'+esc(p.task_id||'')+'"><div class="taskhead"><h2>'+esc(p.title||'后台任务')+'</h2><div class="taskactions"><span class="badge '+s+'">'+label(s)+'</span><button type="button" class="pin" data-pin="'+esc(id)+'" aria-pressed="'+isPinned+'" aria-label="'+(isPinned?'取消置顶':'置顶')+'：'+esc(p.title||'后台任务')+'">'+(isPinned?'★ 已置顶':'☆ 置顶')+'</button></div></div>'+
+ '<p class="statusline '+s+'">当前阶段 · '+esc(p.stage||'等待核对')+(s==='running'&&n===100?' · 等待后续验收':'')+'</p><div class="countline"><strong>'+count(p)+'</strong><span>'+(n==null?'进度待确认':fmt(Number(n.toFixed(1)))+'%')+' · 剩余 '+remaining(p)+'</span></div>'+bar(p)+
+ '<div class="metrics"><div><span>速度</span><b>'+rate(p)+'</b></div><div><span>本阶段预计剩余</span><b>'+eta(p)+'</b></div><div><span>进度更新时间</span><b>'+esc(stamp(p.updated_at))+'</b></div></div>'+
+ (p.message?'<p class="message">'+esc(p.message)+'</p>':'')+
+ (a.length?'<div class="phasecount">各阶段进度 · 分别统计、分别验收</div><div class="tablewrap"><table><thead><tr><th scope="col">阶段</th><th scope="col">已完成 / 总量</th><th scope="col">进度</th><th scope="col">剩余</th><th scope="col">速度 / 预计剩余</th></tr></thead><tbody>'+a.map(row).join('')+'</tbody></table></div>':'')+
+ '<p class="muted basis">'+esc(halted(s)?'当前状态不使用旧速率继续估计。':p.speed_basis||'等待来源提供有效速度记录。')+(p.eta_basis&&!halted(s)?' · '+esc(p.eta_basis):'')+'</p></article>';
+}
+
+const prefsKey='global-task-progress-ui-v1';
+const sortModes=new Set(['updated','attention','progress','name']);
+let prefs={sort:'updated',pins:[]},savedPrefs=true;
+try{const old=JSON.parse(localStorage.getItem(prefsKey)||'{}');if(sortModes.has(old.sort))prefs.sort=old.sort;if(Array.isArray(old.pins))prefs.pins=old.pins.filter(id=>typeof id==='string');}catch{savedPrefs=false;}
+const pinned=new Set(prefs.pins);
+let lastTasks=[];
+function savePrefs(){try{localStorage.setItem(prefsKey,JSON.stringify({sort:prefs.sort,pins:[...pinned]}));savedPrefs=true;}catch{savedPrefs=false;}}
+function compareRows(a,b){
+ const pin=Number(pinned.has(b.id))-Number(pinned.has(a.id));if(pin)return pin;
+ let order=0;
+ if(prefs.sort==='attention'){const rank={error:0,failed:0,attention:1,paused:2,running:3,complete:4,cancelled:5,idle:6};order=(rank[a.task.status]??1)-(rank[b.task.status]??1);}
+ else if(prefs.sort==='progress')order=(pct(a.task)??-1)-(pct(b.task)??-1);
+ else if(prefs.sort==='name')order=String(a.task.title||'').localeCompare(String(b.task.title||''),'zh-CN');
+ else order=(num(b.task.updated_ts)||Date.parse(b.task.updated_at)||0)-(num(a.task.updated_ts)||Date.parse(a.task.updated_at)||0);
+ return order||String(a.task.title||a.id).localeCompare(String(b.task.title||b.id),'zh-CN')||a.id.localeCompare(b.id);
+}
+function displayTasks(tasks){
+ lastTasks=tasks;
+ const rows=tasks.map((task,index)=>({task,id:String(task.task_id||task.title||'task-'+index)})).sort(compareRows);
+ const current=rows.filter(row=>!ended.has(row.task.status)),history=rows.filter(row=>ended.has(row.task.status));
+ renderList(ui.currentTasks,current);renderList(ui.historyList,history);
+ const present=new Set(rows.map(row=>row.id));for(const id of cards.keys())if(!present.has(id))cards.delete(id);
+ ui.currentTitle.textContent='当前任务（'+current.length+'）';ui.emptyCurrent.hidden=!!current.length;ui.emptyCurrent.textContent='当前没有未结束的任务。';
+ ui.historyTasks.hidden=!history.length;ui.historySummary.textContent='历史任务（'+history.length+'） · 展开查看记录';
+ const count=rows.filter(row=>pinned.has(row.id)).length;
+ el('pinHint').textContent='已置顶 '+count+' 个 · 置顶任务优先'+(savedPrefs?'':' · 偏好仅在本次页面有效');
+ el('clearPins').disabled=!pinned.size;
+}
+
+const cards=new Map();
+const ended=new Set(['complete','failed','cancelled','idle']);
+const ui=Object.fromEntries(['panels','error','overview','currentTitle','currentTasks','emptyCurrent','historyTasks','historySummary','historyList','stamp'].map(id=>[id,document.getElementById(id)]));
+let loading=false;
+function renderCard(p,id){
+ let node=cards.get(id);
+ if(!node){
+  node=document.createElement('article');node.className='card';node.dataset.taskId=id;
+  node.innerHTML='<div class="task-overview"></div><details class="stages" open><summary>各阶段进度 · 分别统计、分别验收</summary><div class="stage-list"></div></details>';
+  cards.set(id,node);
+ }
+ const template=document.createElement('template');template.innerHTML=card(p);
+ const next=template.content.firstElementChild,table=next.querySelector('.tablewrap');
+ const nextHead=next.querySelector('.taskhead'),head=node.querySelector(':scope > .taskhead');
+ if(!head)node.insertBefore(nextHead,node.firstChild);
+ else{
+  head.querySelector('h2').textContent=nextHead.querySelector('h2').textContent;
+  const badge=head.querySelector('.badge'),nextBadge=nextHead.querySelector('.badge');badge.className=nextBadge.className;badge.textContent=nextBadge.textContent;
+  const pin=head.querySelector('.pin'),nextPin=nextHead.querySelector('.pin');pin.textContent=nextPin.textContent;for(const attr of ['data-pin','aria-pressed','aria-label'])pin.setAttribute(attr,nextPin.getAttribute(attr));
+  nextHead.remove();
+ }
+ next.querySelector('.phasecount')?.remove();table?.remove();
+ node.querySelector('.task-overview').replaceChildren(...next.childNodes);
+ const details=node.querySelector('.stages');details.hidden=!table;
+ details.querySelector('.stage-list').replaceChildren(...(table?[table]:[]));
+ return node;
+}
+function renderList(container,rows){
+ const wanted=new Set(rows.map(row=>row.id));let cursor=container.firstElementChild;
+ for(const row of rows){const node=renderCard(row.task,row.id);if(node===cursor)cursor=cursor.nextElementSibling;else container.insertBefore(node,cursor);}
+ for(const node of Array.from(container.children))if(!wanted.has(node.dataset.taskId))node.remove();
+}
+async function tick(){
+ if(loading)return;loading=true;
+ try{
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),8000);let response;
+  try{response=await fetch('/api/tasks',{cache:'no-store',signal:controller.signal});}finally{clearTimeout(timeout)}
+  if(!response.ok)throw Error('统一进度服务不可读取');const snapshot=await response.json();
+  if(!Array.isArray(snapshot.tasks))throw Error('任务列表格式无效');
+  const observed=Date.parse(snapshot.observed_at||snapshot.updated_at);
+  if(!Number.isFinite(observed)||Date.now()-observed>90000)throw Error('进度来源超过90秒未刷新');
+  const tasks=snapshot.tasks.map(p=>({...p,status:p.status==='running'&&(!p.updated_at||!Number.isFinite(Date.parse(p.updated_at))||Date.now()-Date.parse(p.updated_at)>90000)?'attention':p.status}));
+  displayTasks(tasks);
+  const counts=[['任务总数',tasks.length],['进行中',tasks.filter(p=>p.status==='running').length],['暂停 / 待核对 / 异常',tasks.filter(p=>['paused','attention','error','failed'].includes(p.status)).length],['已完成',tasks.filter(p=>p.status==='complete').length]];
+  ui.overview.innerHTML=counts.map(([name,n])=>'<div class="tile"><span>'+name+'</span><strong>'+n+'</strong></div>').join('');
+  ui.panels.hidden=false;ui.overview.hidden=false;ui.error.hidden=true;
+  el('connection').className='live';el('connection').textContent='自动刷新 · 2 秒';
+  ui.stamp.textContent='页面刷新：'+stamp(new Date().toISOString())+' · 数据采样：'+stamp(snapshot.observed_at||snapshot.updated_at);
+ }catch(error){
+  // Preserve the existing task nodes and expansion state across refreshes and outages.
+  ui.panels.hidden=true;ui.overview.hidden=true;ui.error.hidden=false;ui.error.textContent=(error.name==='AbortError'?'连接超时':error.message)+'；不显示旧数字或旧 ETA，正在重试。';
+  el('connection').className='live error';el('connection').textContent='连接中断';
+ }finally{loading=false;}
+}
+el('taskSort').value=prefs.sort;
+el('taskSort').addEventListener('change',event=>{prefs.sort=sortModes.has(event.target.value)?event.target.value:'updated';savePrefs();displayTasks(lastTasks);});
+ui.panels.addEventListener('click',event=>{const button=event.target.closest('button[data-pin]');if(!button)return;const id=button.dataset.pin;if(pinned.has(id))pinned.delete(id);else pinned.add(id);savePrefs();displayTasks(lastTasks);document.querySelector('button[data-pin="'+CSS.escape(id)+'"]')?.focus({preventScroll:true});});
+el('clearPins').addEventListener('click',()=>{pinned.clear();savePrefs();displayTasks(lastTasks);});
+
+tick();setInterval(tick,2000);
+
+</script></body></html>
+

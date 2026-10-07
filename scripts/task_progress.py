@@ -1,0 +1,409 @@
+"""Unified local progress, v1-compatible; Python standard library only."""
+import argparse
+import contextlib
+import copy
+import json
+import math
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PORT = 8790
+IDENTITY = "agent-global-progress-v1"
+DEFAULT = Path(os.environ.get("TASK_PROGRESS_STATE_DIR", "D:/Codex/维护/统一任务进度/运行数据"))
+STALE_SECONDS = 90
+RATE_WINDOW = 60
+STATUSES = {"running", "complete", "paused", "failed", "cancelled"}
+HALTED = {"paused", "failed", "cancelled", "attention", "error", "idle"}
+
+
+def now():
+    return datetime.now(timezone(timedelta(hours=8))).isoformat()
+
+
+def numeric(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def counts(done, total):
+    if not numeric(done) or done < 0:
+        raise ValueError("done 必须为有限的非负数")
+    if total is not None and (not numeric(total) or total < done):
+        raise ValueError("total 必须不小于 done；未知总量使用 None")
+
+
+def task_id_check(task_id):
+    if not task_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in task_id):
+        raise ValueError("task_id 只允许英数字、- 和 _")
+
+
+def state_path(state):
+    state = Path(state)
+    if not state.is_absolute():
+        raise ValueError("state 必须是绝对路径；其他系统请显式指定数据目录")
+    if os.name == "nt" and (not state.anchor or not Path(state.anchor).exists()):
+        raise RuntimeError("数据目录所在磁盘不可用；不自动迁移到其他磁盘")
+    return state.resolve()
+
+
+def read(path):
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def atomic(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + "." + uuid.uuid4().hex + ".part")
+    try:
+        with temp.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        for attempt in range(6):
+            try:
+                os.replace(temp, path)
+                return
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+
+@contextlib.contextmanager
+def file_lock(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as stream:
+        stream.seek(0)
+        stream.write(b"0")
+        stream.flush()
+        stream.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def health(state):
+    with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/health", timeout=2) as response:
+        value = json.load(response)
+    if value.get("identity") != IDENTITY:
+        raise RuntimeError("固定端口由其他程序占用，不更换端口")
+    if not value.get("state_dir") or state_path(value["state_dir"]) != state_path(state):
+        raise RuntimeError("固定端口已使用另一数据目录，不创建第二套进度")
+    return value
+
+
+def ensure(state=DEFAULT):
+    state = state_path(state)
+    try:
+        return health(state)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError("固定端口返回其他 HTTP 服务响应") from error
+    except urllib.error.URLError:
+        pass
+    except (ValueError, KeyError) as error:
+        raise RuntimeError("固定端口返回非统一进度数据") from error
+    try:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", PORT))
+    except OSError as error:
+        raise RuntimeError("固定端口已占用，不更换随机端口") from error
+    state.mkdir(parents=True, exist_ok=True)
+    flags = (subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS) if os.name == "nt" else 0
+    with (state / "服务日志.txt").open("ab", buffering=0) as log:
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "serve", "--state-dir", str(state)],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, creationflags=flags,
+            close_fds=True, start_new_session=os.name != "nt",
+        )
+    for _ in range(30):
+        try:
+            return health(state)
+        except urllib.error.URLError:
+            time.sleep(0.2)
+    raise RuntimeError("统一进度服务未启动，请检查固定端口与服务日志")
+
+
+def measured_rate(samples, stamp, done):
+    samples = [list(item) for item in samples]
+    samples.append([stamp, done])
+    cutoff = stamp - RATE_WINDOW
+    while len(samples) > 1 and samples[1][0] <= cutoff:
+        samples.pop(0)
+    if samples and samples[0][0] < cutoff:
+        samples[0][0] = cutoff
+    if len(samples) > 1000:
+        samples = [samples[0]] + samples[-999:]
+    elapsed = stamp - samples[0][0]
+    rate = (done - samples[0][1]) / elapsed if elapsed >= 1 else None
+    return samples, rate
+
+
+class Reporter:
+    def __init__(self, task_id, title, state=DEFAULT, *, auto_start=True):
+        task_id_check(task_id)
+        self.state = state_path(state)
+        self.task_id, self.title = task_id, title
+        self.path = self.state / "任务" / (task_id + ".json")
+        self.lock_path = self.state / "锁" / (task_id + ".lock")
+        self.lock = threading.RLock()
+        if auto_start:
+            ensure(self.state)
+
+    def update(self, stage, done, total, message="", status="running", unit="项"):
+        counts(done, total)
+        if status not in STATUSES or not stage or not unit:
+            raise ValueError("状态、阶段或计数单位无效")
+        if status == "complete" and (total is None or done != total):
+            raise ValueError("完成必须有可核实的当前阶段全部完成量")
+        with self.lock, file_lock(self.lock_path):
+            stamp = time.time()
+            value = read(self.path) if self.path.exists() else {
+                "task_id": self.task_id, "started_ts": stamp, "stages": {}, "attempts": [],
+            }
+            stages = value.setdefault("stages", {})
+            previous = copy.deepcopy(stages.get(stage, {}))
+            if status == "complete" and any(p.get("status") != "complete" for name, p in stages.items() if name != stage):
+                raise ValueError("其他阶段尚未完成，不能将整体标记完成")
+            if previous and done < previous.get("done", 0):
+                raise ValueError("计数不能静默倒退；核对检查点并保留旧尝试记录")
+            if previous and previous.get("unit", unit) != unit:
+                raise ValueError("同一阶段的计数单位不能改变")
+            interrupted = value.get("status") in HALTED or stamp - value.get("updated_ts", stamp) > STALE_SECONDS
+            resume = status == "running" and interrupted
+            if resume:
+                value.setdefault("attempts", []).append({
+                    "status": value.get("status"), "stage": value.get("stage"),
+                    "done": value.get("done"), "total": value.get("total"),
+                    "updated_at": value.get("updated_at"), "message": value.get("message", ""),
+                })
+            samples = [] if resume else previous.get("_samples", [])
+            samples, rate = measured_rate(samples, stamp, done)
+            remaining = None if total is None else total - done
+            eta = remaining / rate if remaining is not None and rate and rate > 0 else None
+            basis = "最近60秒实际完成量增量" if rate is not None else "等待实际完成量增量测量"
+            if status in HALTED:
+                rate, eta, basis = None, None, "任务已暂停或停止，停止估计"
+            phase_complete = total is not None and done == total
+            if phase_complete and status not in HALTED:
+                eta = 0
+            phase = {
+                "stage": stage, "done": done, "total": total, "unit": unit,
+                "started_ts": stamp if resume else previous.get("started_ts", stamp),
+                "status": "complete" if phase_complete and status not in HALTED else status,
+                "speed": rate, "speed_basis": basis, "eta_seconds": eta, "_samples": samples,
+            }
+            stages[stage] = phase
+            value.update(
+                title=self.title, stage=stage, done=done, total=total, remaining=remaining,
+                percent=None if total is None else (100 if total == 0 else round(100 * done / total, 1)),
+                status=status, unit=unit, speed=rate, speed_basis=basis, eta_seconds=eta,
+                eta_basis="仅估计当前阶段，按近期实际增量更新", message=message,
+                updated_ts=stamp, updated_at=now(), pid=os.getpid(),
+            )
+            atomic(self.path, value)
+
+    def stop(self, status, message=""):
+        if status not in {"paused", "failed", "cancelled"}:
+            raise ValueError("stop 仅接受 paused/failed/cancelled")
+        value = read(self.path)
+        self.update(value["stage"], value["done"], value["total"], message, status, value["unit"])
+
+    def heartbeat(self):
+        with self.lock:
+            if not self.path.exists():
+                return
+            value = read(self.path)
+            if value.get("status") == "running":
+                self.update(value["stage"], value["done"], value["total"], value.get("message", ""), unit=value["unit"])
+
+    @contextlib.contextmanager
+    def pulse(self, seconds=10):
+        if not numeric(seconds) or not 0 < seconds < STALE_SECONDS:
+            raise ValueError("心跳间隔必须大于0且小于90秒")
+        stop = threading.Event()
+        errors = []
+
+        def loop():
+            try:
+                while not stop.wait(seconds):
+                    self.heartbeat()
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=loop, daemon=True)
+        thread.start()
+        try:
+            yield self
+        finally:
+            stop.set()
+            thread.join()
+        if errors:
+            raise RuntimeError("进度心跳写入失败") from errors[0]
+
+
+def register_source(task_id, title, path, state=DEFAULT):
+    task_id_check(task_id)
+    state = state_path(state)
+    path = Path(path)
+    if not path.is_absolute():
+        raise ValueError("外部 JSON 必须使用绝对路径")
+    if (state / "任务" / (task_id + ".json")).exists():
+        raise ValueError("相同 ID 已有本地记录，不能同时注册第二个写入来源")
+    with file_lock(state / "注册.lock"):
+        target = state / "外部来源.json"
+        value = read(target) if target.exists() else {}
+        value[task_id] = {"task_id": task_id, "title": title, "path": str(path)}
+        atomic(target, value)
+    ensure(state)
+
+
+def normalized(value, stamp, fallback_ts=None):
+    value = copy.deepcopy(value)
+    counts(value.get("done"), value.get("total"))
+    ts = value.get("updated_ts")
+    if ts is None and value.get("updated_at"):
+        parsed = datetime.fromisoformat(value["updated_at"].replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("更新时间缺少时区")
+        ts = parsed.timestamp()
+    ts = ts if numeric(ts) else fallback_ts
+    value["updated_ts"] = ts
+    value.setdefault("updated_at", datetime.fromtimestamp(ts, timezone(timedelta(hours=8))).isoformat() if ts else None)
+    status = value.get("status", "attention")
+    stale = status == "running" and (not numeric(ts) or stamp - ts > STALE_SECONDS or ts > stamp + 5)
+    if stale:
+        value.update(status="attention", message=(value.get("message") or "") + "；更新时间无效或超过90秒，需核对任务进程。")
+    elif status not in STATUSES | HALTED:
+        value["status"] = "attention"
+    halted = value.get("status") in HALTED
+    rate = value.get("speed")
+    if halted or not numeric(rate) or rate < 0:
+        value["speed"] = None
+        value["eta_seconds"] = None
+    elif rate == 0:
+        value["eta_seconds"] = None
+    if value.get("total") is None:
+        value.update(remaining=None, percent=None, eta_seconds=None)
+    eta = value.get("eta_seconds")
+    if eta is not None and (not numeric(eta) or eta < 0):
+        value["eta_seconds"] = None
+    phases = value.get("stages", {})
+    if isinstance(phases, list):
+        phases = {p.get("stage", str(i)): p for i, p in enumerate(phases)}
+    for phase in phases.values():
+        phase.pop("_samples", None)
+        if halted and phase.get("status") not in {"complete", "failed", "cancelled"}:
+            phase.update(status=value["status"], speed=None, eta_seconds=None)
+    value["stages"] = phases
+    return value
+
+
+def snapshot(state):
+    state, stamp = Path(state), time.time()
+    rows = {}
+    for path in (state / "任务").glob("*.json"):
+        try:
+            rows[path.stem] = normalized(read(path), stamp)
+        except Exception as error:
+            rows[path.stem] = {"task_id": path.stem, "title": path.stem, "status": "error", "message": str(error), "done": None, "total": None, "speed": None, "eta_seconds": None}
+    sources = read(state / "外部来源.json") if (state / "外部来源.json").exists() else {}
+    for task_id, source in sources.items():
+        if task_id in rows:
+            rows[task_id].update(status="error", speed=None, eta_seconds=None, message="相同任务 ID 有两个来源，请核对写入者")
+            continue
+        try:
+            path = Path(source["path"])
+            value = read(path)
+            value.update(task_id=task_id, title=source["title"], external=True)
+            rows[task_id] = normalized(value, stamp, path.stat().st_mtime)
+        except Exception as error:
+            rows[task_id] = {"task_id": task_id, "title": source["title"], "status": "error", "message": "外部来源无法读取：" + str(error), "done": None, "total": None, "speed": None, "eta_seconds": None}
+    return sorted(rows.values(), key=lambda row: (row.get("status") in {"complete", "failed", "cancelled", "idle"}, -float(row.get("updated_ts") or 0)))
+
+
+def serve(state):
+    state = state_path(state)
+    state.mkdir(parents=True, exist_ok=True)
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            if self.headers.get("Host") not in {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}:
+                self.send_error(403)
+                return
+            if self.path == "/":
+                raw = Path(__file__).with_name("progress_page.html").read_bytes()
+                content_type = "text/html; charset=utf-8"
+            elif self.path == "/api/health":
+                raw = json.dumps({"identity": IDENTITY, "port": PORT, "pid": os.getpid(), "state_dir": str(state)}).encode()
+                content_type = "application/json"
+            elif self.path == "/api/tasks":
+                try:
+                    value = {"tasks": snapshot(state), "observed_at": now(), "updated_at": now()}
+                    raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+                except Exception:
+                    self.send_error(503, "Cannot read progress sources")
+                    return
+                content_type = "application/json; charset=utf-8"
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    atomic(state / "服务状态.json", {"identity": IDENTITY, "port": PORT, "pid": os.getpid(), "script": str(Path(__file__).resolve()), "started_at": now()})
+    server.serve_forever()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=["ensure", "serve", "register"])
+    parser.add_argument("--state-dir", type=Path, default=DEFAULT)
+    parser.add_argument("--task-id")
+    parser.add_argument("--title")
+    parser.add_argument("--file", type=Path)
+    args = parser.parse_args()
+    if args.command == "serve":
+        serve(args.state_dir)
+    elif args.command == "ensure":
+        ensure(args.state_dir)
+        print(f"http://127.0.0.1:{PORT}/")
+    else:
+        if not all([args.task_id, args.title, args.file]):
+            parser.error("register 需要 --task-id、--title 和 --file")
+        register_source(args.task_id, args.title, args.file, args.state_dir)
+
+
+if __name__ == "__main__":
+    main()
