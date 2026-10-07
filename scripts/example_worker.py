@@ -1,11 +1,10 @@
-"""Create a small new demo, copy, SHA-256 verify and publish a manifest."""
+"""A real, resumable copy/verification demo; no shell loop or extra services."""
 import argparse
 import hashlib
-import json
 from pathlib import Path
 import shutil
-import time
-from task_progress import DEFAULT, Reporter
+from task_progress import DEFAULT, Reporter, atomic, read, task_id_check
+from worker_helpers import CheckpointStore, RetryPolicy, VerificationError, WorkerBusy, retry_call, worker_guard
 
 
 def digest(path):
@@ -21,44 +20,99 @@ def main():
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT)
     parser.add_argument("--task-id", default="progress-example")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
-    root = args.work_dir
-    if not root.is_absolute() or root.exists() and any(root.iterdir()):
-        parser.error("演示目录必须为绝对路径且不存在或为空")
-    r = Reporter(args.task_id, "统一进度技能真实演示", args.state_dir)
-    r.update("准备样例", 0, 5, "仅写入新的演示目录", unit="份")
+    task_id_check(args.task_id)
+    if not args.work_dir.is_absolute():
+        parser.error("演示目录必须为绝对路径")
     try:
-        with r.pulse():
-            (root / "source").mkdir(parents=True, exist_ok=True)
-            (root / "copied").mkdir()
-            originals = []
-            for index in range(5):
-                path = root / "source" / f"sample-{index}.bin"
-                path.write_bytes((f"progress-demo-{index}\n".encode()) * 32768)
-                originals.append(path)
-                r.update("准备样例", index + 1, 5, unit="份")
-            r.update("复制", 0, 5, unit="份")
-            for index, path in enumerate(originals, 1):
-                shutil.copy2(path, root / "copied" / path.name)
-                r.update("复制", index, 5, unit="份")
-                time.sleep(0.3)
-            r.update("完整SHA-256校验", 0, 5, unit="份")
-            manifest = []
-            for index, path in enumerate(originals, 1):
-                source_hash = digest(path)
-                if source_hash != digest(root / "copied" / path.name):
-                    raise RuntimeError("完整哈希校验不一致：" + path.name)
-                manifest.append({"file": path.name, "sha256": source_hash})
-                r.update("完整SHA-256校验", index, 5, unit="份")
-            r.update("发布清单", 0, 1, unit="项")
+        with worker_guard(args.state_dir / "锁" / (args.task_id + "-worker.lock")):
+            run(args, parser)
+    except WorkerBusy as error:
+        parser.exit(2, str(error) + "\n")
+
+
+def run(args, parser):
+    root = args.work_dir
+    if root.exists() and any(root.iterdir()) and not args.resume:
+        parser.error("目录非空；接续本演示时显式使用 --resume，同一任务沿用原ID")
+    if args.resume and not (root / "checkpoints.sqlite3").exists():
+        parser.error("缺少本演示的检查点，不将任意非空目录当成可恢复任务")
+    r = Reporter(args.task_id, "统一进度技能真实演示", args.state_dir)
+    if args.resume:
+        r.begin_stage_attempt("恢复核验", 0, 1, "接续核验", reason="重新核对接续条件", unit="项")
+    else:
+        r.update("准备样例", 0, 5, "准备新样例", unit="份")
+    try:
+        with r.pulse(), CheckpointStore(root / "checkpoints.sqlite3") as checkpoints:
+            source = root / "source"
+            destination = root / "copied"
+            source.mkdir(exist_ok=True)
+            destination.mkdir(exist_ok=True)
+            if not args.resume:
+                for index in range(5):
+                    (source / f"sample-{index}.bin").write_bytes((f"progress-demo-{index}\n".encode()) * 32768)
+                    r.progress("准备样例", index + 1, 5, unit="份")
+            originals = [source / f"sample-{index}.bin" for index in range(5)]
+            if not all(path.is_file() for path in originals):
+                raise VerificationError("样例不完整，保留原目录以便核对")
+            if args.resume:
+                r.update("恢复核验", 1, 1, unit="项")
+            r.update("准备样例", 5, 5, unit="份")
+
+            def valid_receipt(receipt):
+                original, copied = Path(receipt["source"]), Path(receipt["copied"])
+                return original.is_file() and copied.is_file() and digest(original) == receipt["sha256"] == digest(copied)
+
+            def copy_verified(original):
+                copied = destination / original.name
+                shutil.copy2(original, copied)
+                return {"source": str(original), "copied": str(copied), "sha256": digest(original)}
+
+            for stage in ("复制", "完整SHA-256校验"):
+                verified, missing = [], []
+                for original in originals:
+                    receipt = checkpoints.get(stage, original.name)
+                    if receipt is not None and valid_receipt(receipt):
+                        verified.append(receipt)
+                    else:
+                        missing.append(original)
+                previous = read(r.path).get("stages", {}).get(stage, {}) if r.path.exists() else {}
+                if len(verified) < previous.get("done", 0):
+                    raise VerificationError("已有检查点验证失败，已报告完成量不再可信，需核对旧尝试")
+                done = len(verified)
+                r.update(stage, done, 5, "复用已重新核验的完成结果", unit="份")
+                for original in missing:
+                    def operation():
+                        if stage == "复制":
+                            return retry_call(lambda: copy_verified(original), retry_if=lambda error: isinstance(error, (ConnectionError, TimeoutError)), policy=RetryPolicy())
+                        receipt = {"source": str(original), "copied": str(destination / original.name), "sha256": digest(original)}
+                        if not valid_receipt(receipt):
+                            raise VerificationError("完整哈希不一致：" + original.name)
+                        return receipt
+                    receipt, _ = checkpoints.run_once(stage, original.name, operation, valid_receipt)
+                    verified.append(receipt)
+                    done += 1
+                    r.progress(stage, done, 5, unit="份")
+            manifest = [{"file": Path(item["source"]).name, "sha256": item["sha256"]} for item in sorted(verified, key=lambda item: item["source"])]
             output = root / "manifest.json"
-            output.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-            if json.loads(output.read_text(encoding="utf-8")) != manifest:
-                raise RuntimeError("发布清单回读失败")
-            r.update("发布清单", 1, 1, "复制、完整校验和清单回读均通过", status="complete", unit="项")
+            existing = checkpoints.get("发布清单", "manifest")
+
+            def publication_valid(receipt):
+                return output.is_file() and read(output) == manifest and receipt.get("manifest_sha256") == digest(output)
+
+            published = bool(existing is not None and publication_valid(existing))
+            r.update("发布清单", int(published), 1, unit="项")
+
+            def publish():
+                atomic(output, manifest)
+                return {"manifest_sha256": digest(output)}
+            checkpoints.run_once("发布清单", "manifest", publish, publication_valid)
+            r.update("发布清单", 1, 1, "复制、完整校验、检查点和清单回读均通过", status="complete", unit="项")
         print(output)
     except Exception as error:
-        r.stop("failed", str(error))
+        if r.path.exists():
+            r.stop("failed", str(error))
         raise
 
 

@@ -148,31 +148,92 @@ def ensure(state=DEFAULT):
 
 def measured_rate(samples, stamp, done):
     samples = [list(item) for item in samples]
-    samples.append([stamp, done])
+    if len(samples) > 1 and int(samples[-1][0]) == int(stamp):
+        samples[-1] = [stamp, done]
+    else:
+        samples.append([stamp, done])
     cutoff = stamp - RATE_WINDOW
     while len(samples) > 1 and samples[1][0] <= cutoff:
         samples.pop(0)
     if samples and samples[0][0] < cutoff:
         samples[0][0] = cutoff
-    if len(samples) > 1000:
-        samples = [samples[0]] + samples[-999:]
+    if len(samples) > RATE_WINDOW + 2:
+        samples = [samples[0]] + samples[-(RATE_WINDOW + 1):]
     elapsed = stamp - samples[0][0]
     rate = (done - samples[0][1]) / elapsed if elapsed >= 1 else None
     return samples, rate
 
 
 class Reporter:
-    def __init__(self, task_id, title, state=DEFAULT, *, auto_start=True):
+    def __init__(self, task_id, title, state=DEFAULT, *, auto_start=True, flush_interval=1):
         task_id_check(task_id)
+        if not numeric(flush_interval) or not 0 <= flush_interval <= 2:
+            raise ValueError("flush_interval 必须在0至2秒之间")
         self.state = state_path(state)
         self.task_id, self.title = task_id, title
         self.path = self.state / "任务" / (task_id + ".json")
         self.lock_path = self.state / "锁" / (task_id + ".lock")
         self.lock = threading.RLock()
+        self.flush_interval = flush_interval
+        self._pending = None
+        self._last_written = None
+        self._last_flush = 0
         if auto_start:
             ensure(self.state)
 
-    def update(self, stage, done, total, message="", status="running", unit="项"):
+    def update(self, stage, done, total, message="", status="running", unit="项", *, restart_reason=None):
+        """Immediately publish a stage/status change, preserving pending counts."""
+        with self.lock:
+            if restart_reason:
+                self.flush()
+            if self._pending:
+                pending = self._pending
+                if pending[0] != stage:
+                    self.flush()
+                elif done < pending[1]:
+                    raise ValueError("完成量不能小于尚未刷新的实际完成量")
+            self._write(stage, done, total, message, status, unit, restart_reason=restart_reason)
+            self._pending = None
+            self._last_written = (stage, done, total, status, unit)
+            self._last_flush = time.monotonic()
+
+    def begin_stage_attempt(self, stage, done, total, message="", *, reason, unit="项"):
+        """Explicitly begin new stage work while retaining the previous attempt."""
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("新的阶段尝试必须说明原因")
+        self.update(stage, done, total, message, unit=unit, restart_reason=reason)
+
+    def progress(self, stage, done, total, message="", status="running", unit="项"):
+        """Coalesce routine counters; use pulse() to flush during long operations."""
+        counts(done, total)
+        if status not in STATUSES or not stage or not unit:
+            raise ValueError("状态、阶段或计数单位无效")
+        with self.lock:
+            previous = self._pending
+            if previous and previous[0] == stage and done < previous[1]:
+                raise ValueError("缓冲完成量不能倒退")
+            metadata = self._last_written
+            boundary = (
+                metadata is None or status != "running" or
+                (stage, total, status, unit) != (metadata[0], metadata[2], metadata[3], metadata[4]) or
+                total is not None and done == total
+            )
+            if metadata and metadata[0] == stage and done < metadata[1]:
+                raise ValueError("完成量不能倒退")
+            if boundary or time.monotonic() - self._last_flush >= self.flush_interval:
+                self.update(stage, done, total, message, status, unit)
+                return True
+            self._pending = (stage, done, total, message, status, unit)
+            return False
+
+    def flush(self):
+        with self.lock:
+            if self._pending:
+                self.update(*self._pending)
+                return True
+            return False
+
+    def _write(self, stage, done, total, message="", status="running", unit="项", *, restart_reason=None):
         counts(done, total)
         if status not in STATUSES or not stage or not unit:
             raise ValueError("状态、阶段或计数单位无效")
@@ -185,6 +246,10 @@ class Reporter:
             }
             stages = value.setdefault("stages", {})
             previous = copy.deepcopy(stages.get(stage, {}))
+            if restart_reason and previous:
+                previous.pop("_samples", None)
+                value.setdefault("attempts", []).append({**previous, "reason": restart_reason, "superseded_at": now()})
+                previous = {}
             if status == "complete" and any(p.get("status") != "complete" for name, p in stages.items() if name != stage):
                 raise ValueError("其他阶段尚未完成，不能将整体标记完成")
             if previous and done < previous.get("done", 0):
@@ -213,7 +278,8 @@ class Reporter:
                 "stage": stage, "done": done, "total": total, "unit": unit,
                 "started_ts": stamp if resume else previous.get("started_ts", stamp),
                 "status": "complete" if phase_complete and status not in HALTED else status,
-                "speed": rate, "speed_basis": basis, "eta_seconds": eta, "_samples": samples,
+                "speed": rate, "speed_basis": basis, "eta_seconds": eta,
+                "_samples": [] if phase_complete or status in HALTED else samples,
             }
             stages[stage] = phase
             value.update(
@@ -228,11 +294,14 @@ class Reporter:
     def stop(self, status, message=""):
         if status not in {"paused", "failed", "cancelled"}:
             raise ValueError("stop 仅接受 paused/failed/cancelled")
-        value = read(self.path)
-        self.update(value["stage"], value["done"], value["total"], message, status, value["unit"])
+        with self.lock:
+            self.flush()
+            value = read(self.path)
+            self.update(value["stage"], value["done"], value["total"], message, status, value["unit"])
 
     def heartbeat(self):
         with self.lock:
+            self.flush()
             if not self.path.exists():
                 return
             value = read(self.path)
@@ -247,9 +316,14 @@ class Reporter:
         errors = []
 
         def loop():
+            last_heartbeat = time.monotonic()
+            interval = min(seconds, self.flush_interval or seconds)
             try:
-                while not stop.wait(seconds):
-                    self.heartbeat()
+                while not stop.wait(interval):
+                    self.flush()
+                    if time.monotonic() - last_heartbeat >= seconds:
+                        self.heartbeat()
+                        last_heartbeat = time.monotonic()
             except Exception as error:
                 errors.append(error)
 
@@ -260,6 +334,7 @@ class Reporter:
         finally:
             stop.set()
             thread.join()
+            self.flush()
         if errors:
             raise RuntimeError("进度心跳写入失败") from errors[0]
 

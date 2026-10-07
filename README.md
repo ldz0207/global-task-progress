@@ -23,6 +23,7 @@ Python 3.10+，运行脚本无需第三方包。已有健康服务时优先复�
 ```powershell
 python scripts/task_progress.py ensure
 python scripts/example_worker.py --work-dir 'D:/Codex/维护/统一任务进度/work/新的演示目录' --task-id 'progress-example'
+python scripts/example_worker.py --work-dir 'D:/Codex/维护/统一任务进度/work/新的演示目录' --task-id 'progress-example' --resume
 ```
 
 默认 Windows 数据目录：`D:/Codex/维护/统一任务进度/运行数据`。其他系统必须显式指定绝对路径；可使用 `--state-dir` 或 `TASK_PROGRESS_STATE_DIR`。入口始终固定为本机 8790；本仓库不会自动聚合其他设备上的服务。具体业务接入、接续和后台执行见 [接入说明](references/integration.md)。
@@ -36,4 +37,6 @@ node tests/test_page.cjs
 
 测试通过独立临时数据目录验证计数、暂停恢复、短窗口速率、陈旧状态和接入冲突，不占用新的端口。页面还需在实际浏览器验证自动刷新和详情展开状态。
 
-独立仓库用于后续版本维护。更新先修改本地源码、运行必要测试、核对正在运行的服务，再上传；升级不会自动替换既有长期服务。v0.1.0 的调研依据见 [同类方案比较](references/alternatives.md)。
+v0.2.0 增加了高频计数合并上报、有限速率采样、SQLite检查点、有限重试、重复worker防护和有界线程提交；仍只依赖 Python 标准库。[执行保障与资源选择](references/worker-reliability.md)说明适用范围和恢复方法。[同类方案比较](references/alternatives.md)保留检索与热度依据。
+
+独立仓库用于后续版本维护。更新先修改本地源码、运行必要测试、核对正在运行的服务，再上传；升级不会自动替换既有长期服务或正在运行的业务worker。

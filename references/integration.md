@@ -24,13 +24,15 @@ except Exception as exc:
 r.update("发布", done=1, total=1, status="complete", unit="项")
 ```
 
-`update(stage, done, total, message='', status='running', unit='项')` 支持 `running/complete/paused/failed/cancelled`；总量未知用 `None`。`stop(status, message)` 保留阶段和真实完成量。`heartbeat()` 不递增完成量；`pulse()` 只包住仍在执行的业务代码，退出作用域即停止。
+`update(stage, done, total, message='', status='running', unit='项')` 支持 `running/complete/paused/failed/cancelled`，立即写入；总量未知用 `None`。日常计数使用同签名的 `progress()`，默认每秒合并一次，降低频繁读写与序列化开销。`Reporter(..., flush_interval=1)` 可配置0至2秒；0表示不合并。
+
+`stop(status, message)` 先刷新剩余计数，再保留阶段和真实完成量。`heartbeat()` 不递增完成量；`pulse()` 只包住仍在执行的业务代码，同时刷新缓冲计数，退出作用域刷新剩余量并停止线程。未使用 `pulse()` 的调用者须主动 `flush()`，避免最后一笔量留在内存中。崩溃可能丢失最多一个缓冲窗口的页面计数，实际恢复以业务检查点为准。
 
 ## 后台执行
 
 让 worker 脱离网页生命周期。Windows 可用 `Start-Process -WindowStyle Hidden`，指定既有 Python、绝对脚本路径、D 盘工作目录和日志目录；进程创建返回不代表任务成功，必须核对新鲜进度、实际进程和工作结果。不要为查看进度另起业务服务，也不要另建随机端口。
 
-演示 worker 仅创建一组小样例并执行复制、完整 SHA-256 校验和清单发布。演示目录必须不存在或为空，避免覆盖用户文件。它本身是同步脚本；由既有后台启动方式运行后，网页关闭不影响它。
+演示 worker 仅创建一组小样例并执行复制、完整 SHA-256 校验和清单发布。初次运行目录必须不存在或为空，避免覆盖用户文件；后续用相同 ID、目录及 `--resume` 接续，重新核验本演示 SQLite 检查点后复用结果。它本身是同步脚本；由既有后台启动方式运行后，网页关闭不影响它。
 
 ## 外部 JSON 来源
 
@@ -44,7 +46,7 @@ python scripts/task_progress.py register --task-id existing-job --title '已有�
 
 ## 暂停与恢复
 
-立即调用 `stop('paused', ...)`，异常用 `failed`，取消用 `cancelled`。恢复同 ID、同阶段和真实检查点计数，保留完成的其他阶段；恢复时重置速度采样，不让停机时间或历史完成量抬高速率。阶段计数倒退会被拒绝，若业务确实回滚，应新建明确命名的尝试并保留旧记录，不静默覆写。
+立即调用 `stop('paused', ...)`，异常用 `failed`，取消用 `cancelled`。恢复同 ID、同阶段和真实检查点计数，保留完成的其他阶段；恢复时重置速度采样，不让停机时间或历史完成量抬高速率。普通计数倒退会被拒绝。业务明确需要再次执行某阶段时，使用 `begin_stage_attempt(stage, done, total, reason='具体原因', unit='项')`：沿用任务 ID，把该阶段旧记录保存到 `attempts`，重置此阶段采样和计数，其他阶段保留。这个操作必须有业务依据，不能用于掩盖未通过的验证。
 
 服务超过 90 秒未收到 worker 更新时显示 `attention` 并清除速度/ETA；这只表示需要核对，不能据此判断进程一定退出。心跳仍在但 60 秒内没有完成增量时，速率为 0，ETA 停止估计。总量未知时不显示百分比或 ETA。不同计数单位的阶段不相加成虚构总进度。
 

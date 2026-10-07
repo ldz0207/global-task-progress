@@ -25,16 +25,19 @@ r.update("复制", 0, len(files), "开始复制", unit="份")
 with r.pulse():
     for index, item in enumerate(files, 1):
         copy_one(item)                    # 返回成功后才递增
-        r.update("复制", index, len(files), unit="份")
+        r.progress("复制", index, len(files), unit="份")
     r.update("完整校验", verified, len(files), unit="份")
     # 对未校验项逐项完整校验并更新；通过后进入发布阶段。
 ```
 
 - 复制、完整校验、发布等阶段分别显示；阶段达到总量时，整个任务仍可为 `running`，直到全部验收通过才设 `complete`。
 - `pulse()` 只在真实业务工作作用域中维持心跳。心跳只能证明写入者仍在联系，不能证明有效工作量增加。不要用独立定时器让退出的任务看起来仍在执行。
+- 高频计数用 `progress()` 合并上报，默认最多等待 1 秒；配合 `pulse()`，下一项耗时很长时仍按时刷新。阶段、状态、完成及异常用 `update()` / `stop()` 立即上报。退出工作作用域会刷新剩余真实完成量，进度上报不需逐项启动 PowerShell/CMD。旧模块没有 `progress()` 时沿用 `update()`，不要中途替换正在执行的 worker。
 - 后台工作由独立 worker 执行；页面只读取进度。关闭页面后 worker 继续，不依赖用户再发消息。进度脚本不会替用户启动业务任务；Windows 启动后台 helper 使用隐藏窗口。
 - 暂停、恢复、异常、取消、阶段切换、完成时立即更新。异常后写入 `failed` 再保留异常证据；恢复前核对实际进程和检查点。不要仅凭陈旧文件声称仍在运行。
 - 速度和 ETA 来自近期实际完成量增量，ETA 仅表示当前阶段。未测得速度、近期无进展、暂停、异常或超过 90 秒未更新时停止估计；不能沿用过期 ETA，也不能凭吞吐量宣称整个任务已提速。
+
+需要避免重复执行、有限重试或限制并发时，读 [references/worker-reliability.md](references/worker-reliability.md)。优先复用业务已有队列和检查点；包内轻量辅助基于标准库 SQLite、OS 文件锁和线程池，不要求额外常驻服务。重试只用于已授权、可安全重复的操作；校验不一致、权限错误等应停止核对。
 
 ## 页面与验收
 
@@ -46,5 +49,7 @@ with r.pulse():
 
 - [scripts/task_progress.py](scripts/task_progress.py)：标准库 Reporter、JSON 来源注册、固定端口服务。
 - [scripts/progress_page.html](scripts/progress_page.html)：当前任务、折叠历史、保持详情状态的看板。
-- [scripts/example_worker.py](scripts/example_worker.py)：小型真实复制、SHA-256 校验、清单发布示例，仅写入新建演示目录。
+- [scripts/example_worker.py](scripts/example_worker.py)：小型真实复制、SHA-256 校验、清单发布示例，支持用原 ID 和 `--resume` 重新核验检查点后继续。
+- [scripts/worker_helpers.py](scripts/worker_helpers.py)：有限重试、SQLite 检查点、重复 worker 防护及有界线程提交。
+- [scripts/resource_probe.py](scripts/resource_probe.py)：Windows 只读内存/CPU 采样，区分进度服务、浏览器和业务进程；需要核对资源开销时使用。
 - [references/alternatives.md](references/alternatives.md)：GitHub、skills.sh、SkillHub 候选比较与核对范围。
