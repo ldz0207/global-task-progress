@@ -22,8 +22,10 @@ td:first-child{min-width:135px}td:nth-child(2){min-width:126px;font-variant-nume
 
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.msg{white-space:pre-wrap}.small{font-size:13px;color:var(--muted)}.stages summary{font-size:13px;color:var(--green);cursor:pointer;margin-top:14px}.stages .tablewrap{margin-top:12px}[hidden]{display:none!important}#historyTasks>summary{color:var(--muted);padding:12px 3px;cursor:pointer}#error{background:#fdf1ee;padding:18px;border:1px solid #f0d5ce;border-radius:12px}
 .taskactions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}.pin{font-size:13px;white-space:nowrap}.taskhead h2{overflow-wrap:anywhere}.taskcontrols{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:20px 0}.taskcontrols select{font:inherit;font-size:14px;padding:7px 10px;color:var(--ink);border:1px solid var(--line);border-radius:8px;background:#fff}.taskcontrols label{font-size:14px}.taskcontrols select:focus-visible{outline:3px solid #8fbfaa;outline-offset:3px}.taskcontrols button:disabled{opacity:.5;cursor:default}@media(max-width:700px){.taskhead{flex-wrap:wrap}.taskactions{justify-content:flex-start}.taskcontrols select{max-width:100%}}
-</style></head><body><main><header><div class="eyebrow">本机后台任务 · 统一查看</div><div class="headerline"><h1>统一后台任务进度</h1><span class="live" id="connection" role="status">正在连接</span></div><p class="muted">固定入口 <a href="http://127.0.0.1:8790/">127.0.0.1:8790</a> · 每 2 秒自动刷新。关闭页面后，后台任务仍继续。</p></header>
-<section class="overview" aria-label="任务概况" id="overview"></section><div class="taskcontrols" aria-label="任务查看选项"><label for="taskSort">排序</label><select id="taskSort"><option value="updated">最近更新</option><option value="attention">需要关注优先</option><option value="progress">进度较少优先</option><option value="name">任务名称</option></select><button type="button" id="clearPins">取消全部置顶</button><span class="muted" id="pinHint" aria-live="polite">置顶任务优先</span></div><p id="error" role="status" hidden></p><div id="panels"><section aria-label="当前任务"><h2 id="currentTitle">当前任务</h2><div id="currentTasks"></div><p id="emptyCurrent">正在连接</p></section><details id="historyTasks" hidden><summary id="historySummary">历史任务</summary><div id="historyList"></div></details></div>
+
+.header-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px}.refresh-control{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}.refresh-control input{width:64px;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit;color:var(--ink);background:#fff}.refresh-control button{font-size:12px;padding:4px 9px}.current-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}.current-heading button{font-size:13px;padding:4px 10px;white-space:nowrap}.summary-hint{display:none;margin:12px 0 4px;font-size:12px;color:var(--muted)}#currentTasks.is-compact .metrics,#currentTasks.is-compact .message,#currentTasks.is-compact .basis,#currentTasks.is-compact .statusline,#currentTasks.is-compact .stages{display:none!important}#currentTasks.is-compact .summary-hint{display:block}#currentTasks.is-compact .card{padding-top:17px;padding-bottom:13px}#currentTasks.is-compact .countline{margin-top:4px}#currentTasks.is-compact progress{margin-bottom:0}.refresh-control input:focus-visible{outline:3px solid #8fbfaa;outline-offset:3px}@media(max-width:700px){.headerline{flex-wrap:wrap}.header-right{align-items:flex-start}.current-heading{align-items:flex-start}}
+</style></head><body><main><header><div class="eyebrow">本机后台任务 · 统一查看</div><div class="headerline"><h1>统一后台任务进度</h1><div class="header-right"><span class="live" id="connection" role="status">正在连接</span><form id="refreshForm" class="refresh-control"><label for="refreshSeconds">每</label><input id="refreshSeconds" type="number" min="1" max="300" step="1" value="2" required aria-label="自动刷新间隔（秒）"><span>秒刷新</span><button type="submit">应用</button></form></div></div><p class="muted">固定入口 <a href="http://127.0.0.1:8790/">127.0.0.1:8790</a> · 刷新间隔可在右上角调整。关闭页面后，后台任务仍继续。</p></header>
+<section class="overview" aria-label="任务概况" id="overview"></section><div class="taskcontrols" aria-label="任务查看选项"><label for="taskSort">排序</label><select id="taskSort"><option value="updated">最近更新</option><option value="attention">需要关注优先</option><option value="progress">进度较少优先</option><option value="name">任务名称</option></select><button type="button" id="clearPins">取消全部置顶</button><span class="muted" id="pinHint" aria-live="polite">置顶任务优先</span></div><p id="error" role="status" hidden></p><div id="panels"><section aria-label="当前任务"><div class="current-heading"><h2 id="currentTitle">当前任务</h2><button type="button" id="currentCompactToggle" aria-expanded="true" aria-controls="currentTasks">收起详情</button></div><div id="currentTasks"></div><p id="emptyCurrent">正在连接</p></section><details id="historyTasks" hidden><summary id="historySummary">历史任务</summary><div id="historyList"></div></details></div>
 <footer><p>复制、完整校验、发布及各项计算分别验收；当前阶段完成不代表整个任务完成。</p><p>速度来自有效进度记录。等待测量、已暂停、异常或超过 90 秒无更新时，停止估计剩余时间。</p><p id="stamp">等待首次刷新</p></footer></main><script>
 const el=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -54,7 +56,7 @@ function row(p){return '<tr><td>'+esc(p.stage||'阶段')+'<small><span class="ba
 function card(p){
  const s=status(p.status),n=pct(p),a=phases(p);const id=String(p.task_id||p.title||''),isPinned=pinned.has(id);
  return '<article class="card" data-task-id="'+esc(p.task_id||'')+'"><div class="taskhead"><h2>'+esc(p.title||'后台任务')+'</h2><div class="taskactions"><span class="badge '+s+'">'+label(s)+'</span><button type="button" class="pin" data-pin="'+esc(id)+'" aria-pressed="'+isPinned+'" aria-label="'+(isPinned?'取消置顶':'置顶')+'：'+esc(p.title||'后台任务')+'">'+(isPinned?'★ 已置顶':'☆ 置顶')+'</button></div></div>'+
- '<p class="statusline '+s+'">当前阶段 · '+esc(p.stage||'等待核对')+(s==='running'&&n===100?' · 等待后续验收':'')+'</p><div class="countline"><strong>'+count(p)+'</strong><span>'+(n==null?'进度待确认':fmt(Number(n.toFixed(1)))+'%')+' · 剩余 '+remaining(p)+'</span></div>'+bar(p)+
+ '<p class="summary-hint">当前阶段 · '+esc(p.stage||'等待核对')+(s==='running'&&n===100?' · 等待后续验收':'')+'</p><p class="statusline '+s+'">当前阶段 · '+esc(p.stage||'等待核对')+(s==='running'&&n===100?' · 等待后续验收':'')+'</p><div class="countline"><strong>'+count(p)+'</strong><span>'+(n==null?'进度待确认':fmt(Number(n.toFixed(1)))+'%')+' · 剩余 '+remaining(p)+'</span></div>'+bar(p)+
  '<div class="metrics"><div><span>速度</span><b>'+rate(p)+'</b></div><div><span>本阶段预计剩余</span><b>'+eta(p)+'</b></div><div><span>进度更新时间</span><b>'+esc(stamp(p.updated_at))+'</b></div></div>'+
  (p.message?'<p class="message">'+esc(p.message)+'</p>':'')+
  (a.length?'<div class="phasecount">各阶段进度 · 分别统计、分别验收</div><div class="tablewrap"><table><thead><tr><th scope="col">阶段</th><th scope="col">已完成 / 总量</th><th scope="col">进度</th><th scope="col">剩余</th><th scope="col">速度 / 预计剩余</th></tr></thead><tbody>'+a.map(row).join('')+'</tbody></table></div>':'')+
@@ -63,11 +65,18 @@ function card(p){
 
 const prefsKey='global-task-progress-ui-v1';
 const sortModes=new Set(['updated','attention','progress','name']);
-let prefs={sort:'updated',pins:[]},savedPrefs=true;
-try{const old=JSON.parse(localStorage.getItem(prefsKey)||'{}');if(sortModes.has(old.sort))prefs.sort=old.sort;if(Array.isArray(old.pins))prefs.pins=old.pins.filter(id=>typeof id==='string');}catch{savedPrefs=false;}
+function normalizeRefreshSeconds(value){if(typeof value!=='number'&&typeof value!=='string')return null;if(typeof value==='string'&&!value.trim())return null;const seconds=Number(value);return Number.isInteger(seconds)&&seconds>=1&&seconds<=300?seconds:null;}
+function staleTask(task,clock=Date.now()){
+ if(task.status!=='running')return task;
+ const updated=Date.parse(task.updated_at);
+ if(Number.isFinite(updated)&&clock-updated<=90000)return task;
+ return {...task,status:'attention',speed:null,eta_seconds:null,message:(task.message||'')+'；本页记录超过90秒或更新时间无效，停止旧速度/ETA，等待下一次刷新。'};
+}
+let prefs={sort:'updated',pins:[],refreshSeconds:2,compact:false},savedPrefs=true;
+try{const old=JSON.parse(localStorage.getItem(prefsKey)||'{}');if(sortModes.has(old.sort))prefs.sort=old.sort;if(Array.isArray(old.pins))prefs.pins=old.pins.filter(id=>typeof id==='string');if(normalizeRefreshSeconds(old.refreshSeconds)!=null)prefs.refreshSeconds=normalizeRefreshSeconds(old.refreshSeconds);if(typeof old.compact==='boolean')prefs.compact=old.compact;}catch{savedPrefs=false;}
 const pinned=new Set(prefs.pins);
 let lastTasks=[];
-function savePrefs(){try{localStorage.setItem(prefsKey,JSON.stringify({sort:prefs.sort,pins:[...pinned]}));savedPrefs=true;}catch{savedPrefs=false;}}
+function savePrefs(){try{localStorage.setItem(prefsKey,JSON.stringify({sort:prefs.sort,pins:[...pinned],refreshSeconds:prefs.refreshSeconds,compact:prefs.compact}));savedPrefs=true;}catch{savedPrefs=false;}}
 function compareRows(a,b){
  const pin=Number(pinned.has(b.id))-Number(pinned.has(a.id));if(pin)return pin;
  let order=0;
@@ -77,8 +86,10 @@ function compareRows(a,b){
  else order=(num(b.task.updated_ts)||Date.parse(b.task.updated_at)||0)-(num(a.task.updated_ts)||Date.parse(a.task.updated_at)||0);
  return order||String(a.task.title||a.id).localeCompare(String(b.task.title||b.id),'zh-CN')||a.id.localeCompare(b.id);
 }
+function renderOverviewCounts(tasks){const counts=[['任务总数',tasks.length],['进行中',tasks.filter(p=>p.status==='running').length],['暂停 / 待核对 / 异常',tasks.filter(p=>['paused','attention','error','failed'].includes(p.status)).length],['已完成',tasks.filter(p=>p.status==='complete').length]];ui.overview.innerHTML=counts.map(([name,n])=>'<div class="tile"><span>'+name+'</span><strong>'+n+'</strong></div>').join('');}
 function displayTasks(tasks){
  lastTasks=tasks;
+ ui.currentTasks.classList.toggle('is-compact',prefs.compact);const toggle=el('currentCompactToggle');toggle.textContent=prefs.compact?'展开详情':'收起详情';toggle.setAttribute('aria-expanded',String(!prefs.compact));
  const rows=tasks.map((task,index)=>({task,id:String(task.task_id||task.title||'task-'+index)})).sort(compareRows);
  const current=rows.filter(row=>!ended.has(row.task.status)),history=rows.filter(row=>ended.has(row.task.status));
  renderList(ui.currentTasks,current);renderList(ui.historyList,history);
@@ -131,12 +142,11 @@ async function tick(){
   if(!Array.isArray(snapshot.tasks))throw Error('任务列表格式无效');
   const observed=Date.parse(snapshot.observed_at||snapshot.updated_at);
   if(!Number.isFinite(observed)||Date.now()-observed>90000)throw Error('进度来源超过90秒未刷新');
-  const tasks=snapshot.tasks.map(p=>({...p,status:p.status==='running'&&(!p.updated_at||!Number.isFinite(Date.parse(p.updated_at))||Date.now()-Date.parse(p.updated_at)>90000)?'attention':p.status}));
+  const tasks=snapshot.tasks.map(task=>staleTask(task));
   displayTasks(tasks);
-  const counts=[['任务总数',tasks.length],['进行中',tasks.filter(p=>p.status==='running').length],['暂停 / 待核对 / 异常',tasks.filter(p=>['paused','attention','error','failed'].includes(p.status)).length],['已完成',tasks.filter(p=>p.status==='complete').length]];
-  ui.overview.innerHTML=counts.map(([name,n])=>'<div class="tile"><span>'+name+'</span><strong>'+n+'</strong></div>').join('');
+  renderOverviewCounts(tasks);
   ui.panels.hidden=false;ui.overview.hidden=false;ui.error.hidden=true;
-  el('connection').className='live';el('connection').textContent='自动刷新 · 2 秒';
+  el('connection').className='live';el('connection').textContent='自动刷新 · '+prefs.refreshSeconds+' 秒';
   ui.stamp.textContent='页面刷新：'+stamp(new Date().toISOString())+' · 数据采样：'+stamp(snapshot.observed_at||snapshot.updated_at);
  }catch(error){
   // Preserve the existing task nodes and expansion state across refreshes and outages.
@@ -149,7 +159,15 @@ el('taskSort').addEventListener('change',event=>{prefs.sort=sortModes.has(event.
 ui.panels.addEventListener('click',event=>{const button=event.target.closest('button[data-pin]');if(!button)return;const id=button.dataset.pin;if(pinned.has(id))pinned.delete(id);else pinned.add(id);savePrefs();displayTasks(lastTasks);document.querySelector('button[data-pin="'+CSS.escape(id)+'"]')?.focus({preventScroll:true});});
 el('clearPins').addEventListener('click',()=>{pinned.clear();savePrefs();displayTasks(lastTasks);});
 
-tick();setInterval(tick,2000);
+let refreshTimer;
+function restartRefreshTimer(){clearInterval(refreshTimer);refreshTimer=setInterval(tick,prefs.refreshSeconds*1000);if(!el('connection').classList.contains('error'))el('connection').textContent='自动刷新 · '+prefs.refreshSeconds+' 秒';}
+el('refreshSeconds').value=prefs.refreshSeconds;
+el('refreshForm').addEventListener('submit',event=>{event.preventDefault();const input=el('refreshSeconds'),seconds=normalizeRefreshSeconds(input.value);if(seconds==null){input.reportValidity();return;}prefs.refreshSeconds=seconds;savePrefs();restartRefreshTimer();tick();});
+el('currentCompactToggle').addEventListener('click',()=>{prefs.compact=!prefs.compact;savePrefs();displayTasks(lastTasks);});
+// Client-only expiry check: no HTTP or shell requests, even with a long refresh interval.
+setInterval(()=>{const tasks=lastTasks.map(task=>staleTask(task));if(tasks.some((task,index)=>task!==lastTasks[index])){displayTasks(tasks);renderOverviewCounts(tasks);}},1000);
+
+tick();restartRefreshTimer();
 
 </script></body></html>
 
