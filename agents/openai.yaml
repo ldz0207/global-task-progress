@@ -1,7 +1,7 @@
 interface:
   display_name: "统一任务进度"
   short_description: "统一查看后台任务的真实完成量、各阶段速度和剩余时间，刷新保留详情状态"
-  default_prompt: "使用 $global-task-progress 为当前任务接入统一实时进度，复用固定入口并核验页面与实际状态。"
+  default_prompt: "使用 $global-task-progress 为当前任务接入统一进度，复用已有服务，首次启用检测并选择端口，日常从底层数据核验实际状态。"
 
 policy:
   allow_implicit_invocation: true

@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT)
     parser.add_argument("--task-id", default="progress-example")
+    parser.add_argument("--port", type=int)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     task_id_check(args.task_id)
@@ -38,7 +39,7 @@ def run(args, parser):
         parser.error("目录非空；接续本演示时显式使用 --resume，同一任务沿用原ID")
     if args.resume and not (root / "checkpoints.sqlite3").exists():
         parser.error("缺少本演示的检查点，不将任意非空目录当成可恢复任务")
-    r = Reporter(args.task_id, "统一进度技能真实演示", args.state_dir)
+    r = Reporter(args.task_id, "统一进度技能真实演示", args.state_dir, port=getattr(args, 'port', None))
     if args.resume:
         r.begin_stage_attempt("恢复核验", 0, 1, "接续核验", reason="重新核对接续条件", unit="项")
     else:

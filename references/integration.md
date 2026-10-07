@@ -4,7 +4,7 @@
 
 ## 接入已有服务
 
-先读取 `http://127.0.0.1:8790/api/health`，确认 `identity=agent-global-progress-v1` 和 `state_dir`。新 Reporter 的 `state` 必须与该目录一致。已有同身份的服务会被复用；占用冲突直接报错。服务只绑定 `127.0.0.1`，没有远程写入或执行业务的接口。
+先从所选或保存端口的 `/api/health` 读取身份和目录，确认 `identity=agent-global-progress-v1` 和 `state_dir`。默认入口为 `http://127.0.0.1:8790/`，但不把默认端口当作所有用户的实际配置。新 Reporter 的 `state` 必须与服务目录一致。已有同身份、同目录服务会被复用；端口被其他程序或不同目录的服务占用时返回空闲候选，由用户重新选择。服务只绑定 `127.0.0.1`，没有远程写入或执行业务的接口。
 
 `Reporter` 写入 `<state>/任务/<task_id>.json`，使用临时文件加原子替换。任务 ID 只用英数字、`-`、`_`。不要让两个业务 worker 同时写同一任务。数据结构兼容 v1；整个任务状态与阶段完成状态分开记录。
 
@@ -32,7 +32,22 @@ r.update("发布", done=1, total=1, status="complete", unit="项")
 
 ## 后台执行
 
-让 worker 脱离网页生命周期。Windows 可用 `Start-Process -WindowStyle Hidden`，指定既有 Python、绝对脚本路径、D 盘工作目录和日志目录；进程创建返回不代表任务成功，必须核对新鲜进度、实际进程和工作结果。不要为查看进度另起业务服务，也不要另建随机端口。
+让 worker 脱离网页生命周期。Windows 可用 `Start-Process -WindowStyle Hidden`，指定既有 Python、绝对脚本路径、D 盘工作目录和日志目录；进程创建返回不代表任务成功，必须核对新鲜进度、实际进程和工作结果。不要为查看进度另起业务服务，不自动换随机端口；已选择的进度端口统一复用。
+
+## 端口检测与用户选择
+
+```powershell
+python scripts/task_progress.py ports --state-dir 'D:/实际数据目录'
+# 读取 selected、active_port 和 available_ports；首次使用让用户选择。
+python scripts/task_progress.py configure --state-dir 'D:/实际数据目录' --port 8888
+python scripts/task_progress.py ensure --state-dir 'D:/实际数据目录'
+```
+
+候选检测只短暂尝试绑定本机 IPv4 端口，不启动监听或扫描整个端口空间；默认列出8790起有限范围内的5个空闲候选，`--scan-start` 可指定起点。用户可以选候选之外的任意有效端口，范围1–65535；仍需通过本机权限、保留端口和占用检查。空闲只代表检测时可用，配置与真实启动会再次检测，最终以操作系统绑定结果为准，不承诺端口以后不会被其他程序占用。
+
+`configure` 只验证并保存选择到数据目录的 `服务配置.json`，不启动服务。端口优先级：显式 `port` / `--port`、`TASK_PROGRESS_PORT`、已保存配置、旧服务状态、8790默认值。`Reporter(..., port=N)`、注册来源、环境检查和服务启动使用同一选择逻辑；`Reporter.url` 和 `/api/health` 返回实际入口。页面链接使用访问时的地址，浏览器查看偏好按入口分别保存。
+
+已运行的同目录服务不得因端口选项另开第二套；切换须先按用户明确要求停止旧服务，保留数据和稳定任务 ID，再保存新端口并启动。服务停止只影响查看和聚合，不等于停止业务 worker。关闭网页或业务任务完成不会自动关闭服务；安装检查不启动服务，`ensure` 或首个 Reporter 会按需启动。技能不自动配置开机启动。
 
 演示 worker 仅创建一组小样例并执行复制、完整 SHA-256 校验和清单发布。初次运行目录必须不存在或为空，避免覆盖用户文件；后续用相同 ID、目录及 `--resume` 接续，重新核验本演示 SQLite 检查点后复用结果。它本身是同步脚本；由既有后台启动方式运行后，网页关闭不影响它。
 

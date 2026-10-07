@@ -105,45 +105,183 @@ def file_lock(path):
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
 
-def health(state):
-    with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/health", timeout=2) as response:
+def port_value(value):
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError("端口必须是1至65535的整数")
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise ValueError("端口必须在1至65535之间")
+    return port
+
+
+def resolve_port(state=DEFAULT, port=None):
+    if port is not None:
+        return port_value(port)
+    if os.environ.get("TASK_PROGRESS_PORT"):
+        return port_value(os.environ["TASK_PROGRESS_PORT"])
+    state = Path(state)
+    config = state / "服务配置.json"
+    if config.exists():
+        value = read(config)
+        if value.get("identity") != IDENTITY:
+            raise ValueError("服务配置身份不匹配，请核对配置")
+        return port_value(value.get("port"))
+    previous = state / "服务状态.json"
+    if previous.exists():
+        value = read(previous)
+        if value.get("identity") == IDENTITY:
+            return port_value(value.get("port", PORT))
+    return PORT
+
+
+def service_url(port):
+    return f"http://127.0.0.1:{port_value(port)}/"
+
+
+def allowed_hosts(port):
+    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    if port == 80:
+        hosts.update({"127.0.0.1", "localhost"})
+    return hosts
+
+
+def port_available(port):
+    try:
+        with socket.socket() as probe:
+            if os.name == "nt":
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            probe.bind(("127.0.0.1", port_value(port)))
+        return True
+    except OSError:
+        return False
+
+
+def free_ports(start=PORT, count=5):
+    start = port_value(start)
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 20:
+        raise ValueError("候选数量必须在1至20之间")
+    available = []
+    for candidate in range(start, min(65536, start + 128)):
+        if port_available(candidate):
+            available.append(candidate)
+            if len(available) == count:
+                break
+    return available
+
+
+def health(state, port=None):
+    port = resolve_port(state, port)
+    with urllib.request.urlopen(service_url(port) + "api/health", timeout=2) as response:
         value = json.load(response)
+    if not isinstance(value, dict):
+        raise ValueError("所选端口返回的健康状态格式无效")
     if value.get("identity") != IDENTITY:
-        raise RuntimeError("固定端口由其他程序占用，不更换端口")
+        raise RuntimeError("所选端口由其他程序占用，请选择空闲端口")
     if not value.get("state_dir") or state_path(value["state_dir"]) != state_path(state):
-        raise RuntimeError("固定端口已使用另一数据目录，不创建第二套进度")
+        raise RuntimeError("所选端口已使用另一数据目录，不创建第二套进度")
+    if value.get("port") is not None and value["port"] != port:
+        raise RuntimeError("服务响应端口不匹配")
+    value["url"] = service_url(port)
     return value
 
 
-def ensure(state=DEFAULT):
-    state = state_path(state)
+def inspect_port(state=DEFAULT, port=None):
+    port = resolve_port(state, port)
     try:
-        return health(state)
+        value = health(state, port)
+        return {"ok": True, "status": "reuse", "port": port, "url": service_url(port), "pid": value.get("pid")}
     except urllib.error.HTTPError as error:
-        raise RuntimeError("固定端口返回其他 HTTP 服务响应") from error
+        reason = str(error)
+    except (ValueError, TypeError, RuntimeError) as error:
+        reason = str(error)
+    except (urllib.error.URLError, OSError) as error:
+        if port_available(port):
+            return {"ok": True, "status": "available", "port": port, "url": service_url(port)}
+        reason = str(error)
+    return {"ok": False, "status": "conflict", "port": port, "url": service_url(port), "error": reason, "available_ports": free_ports()}
+
+
+def active_service_port(state):
+    record = Path(state) / "服务状态.json"
+    if not record.exists():
+        return None
+    try:
+        value = read(record)
+        if value.get("identity") == IDENTITY:
+            port = port_value(value.get("port", PORT))
+            health(state, port)
+            return port
+    except (urllib.error.URLError, OSError, ValueError, RuntimeError):
+        pass
+    return None
+
+
+def guard_port_change(state, port):
+    active = active_service_port(state)
+    if active is not None and active != port:
+        raise RuntimeError(f"已有进度服务正在 {service_url(active)} 运行；继续复用，或明确停止旧服务后再切换端口")
+
+
+def save_port(state, port):
+    path = Path(state) / "服务配置.json"
+    previous = read(path) if path.exists() else {}
+    if not isinstance(previous, dict) or previous.get("identity", IDENTITY) != IDENTITY:
+        raise ValueError("服务配置格式或身份不匹配，请先核对")
+    value = {**previous, "identity": IDENTITY, "port": port_value(port)}
+    if previous != value:
+        atomic(path, value)
+
+
+def configure_port(state=DEFAULT, port=None):
+    state = state_path(state)
+    port = port_value(port)
+    with file_lock(state / "启动.lock"):
+        guard_port_change(state, port)
+        report = inspect_port(state, port)
+        if not report["ok"]:
+            raise RuntimeError(f"端口 {port} 不可用；可选空闲端口：{report['available_ports']}")
+        save_port(state, port)
+        return report
+
+
+def ensure(state=DEFAULT, port=None):
+    state = state_path(state)
+    with file_lock(state / "启动.lock"):
+        return _ensure(state, resolve_port(state, port))
+
+
+def _ensure(state, port):
+    guard_port_change(state, port)
+    try:
+        value = health(state, port)
+        save_port(state, port)
+        return value
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"所选端口被其他HTTP服务占用；空闲候选：{free_ports()}") from error
+    except RuntimeError as error:
+        raise RuntimeError(f"{error}；空闲候选：{free_ports()}") from error
     except urllib.error.URLError:
         pass
     except (ValueError, KeyError) as error:
-        raise RuntimeError("固定端口返回非统一进度数据") from error
-    try:
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", PORT))
-    except OSError as error:
-        raise RuntimeError("固定端口已占用，不更换随机端口") from error
+        raise RuntimeError("所选端口返回非统一进度数据") from error
+    if not port_available(port):
+        raise RuntimeError(f"所选端口 {port} 不可用；空闲候选：{free_ports()}；由用户选择，不自动切换")
     state.mkdir(parents=True, exist_ok=True)
     flags = (subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS) if os.name == "nt" else 0
     with (state / "服务日志.txt").open("ab", buffering=0) as log:
         subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "serve", "--state-dir", str(state)],
+            [sys.executable, str(Path(__file__).resolve()), "serve", "--state-dir", str(state), "--port", str(port)],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log, creationflags=flags,
             close_fds=True, start_new_session=os.name != "nt",
         )
     for _ in range(30):
         try:
-            return health(state)
+            value = health(state, port)
+            save_port(state, port)
+            return value
         except urllib.error.URLError:
             time.sleep(0.2)
-    raise RuntimeError("统一进度服务未启动，请检查固定端口与服务日志")
+    raise RuntimeError("统一进度服务未启动，请检查所选端口与服务日志；不自动换端口")
 
 
 def measured_rate(samples, stamp, done):
@@ -165,11 +303,13 @@ def measured_rate(samples, stamp, done):
 
 
 class Reporter:
-    def __init__(self, task_id, title, state=DEFAULT, *, auto_start=True, flush_interval=1):
+    def __init__(self, task_id, title, state=DEFAULT, *, auto_start=True, flush_interval=1, port=None):
         task_id_check(task_id)
         if not numeric(flush_interval) or not 0 <= flush_interval <= 2:
             raise ValueError("flush_interval 必须在0至2秒之间")
         self.state = state_path(state)
+        self.port = resolve_port(self.state, port)
+        self.url = service_url(self.port)
         self.task_id, self.title = task_id, title
         self.path = self.state / "任务" / (task_id + ".json")
         self.lock_path = self.state / "锁" / (task_id + ".lock")
@@ -179,7 +319,7 @@ class Reporter:
         self._last_written = None
         self._last_flush = 0
         if auto_start:
-            ensure(self.state)
+            ensure(self.state, self.port)
 
     def update(self, stage, done, total, message="", status="running", unit="项", *, restart_reason=None):
         """Immediately publish a stage/status change, preserving pending counts."""
@@ -339,7 +479,7 @@ class Reporter:
             raise RuntimeError("进度心跳写入失败") from errors[0]
 
 
-def register_source(task_id, title, path, state=DEFAULT):
+def register_source(task_id, title, path, state=DEFAULT, *, port=None):
     task_id_check(task_id)
     state = state_path(state)
     path = Path(path)
@@ -352,7 +492,7 @@ def register_source(task_id, title, path, state=DEFAULT):
         value = read(target) if target.exists() else {}
         value[task_id] = {"task_id": task_id, "title": title, "path": str(path)}
         atomic(target, value)
-    ensure(state)
+    ensure(state, port)
 
 
 def normalized(value, stamp, fallback_ts=None):
@@ -419,8 +559,10 @@ def snapshot(state):
     return sorted(rows.values(), key=lambda row: (row.get("status") in {"complete", "failed", "cancelled", "idle"}, -float(row.get("updated_ts") or 0)))
 
 
-def serve(state):
+def serve(state, port=None):
     state = state_path(state)
+    port = resolve_port(state, port)
+    guard_port_change(state, port)
     state.mkdir(parents=True, exist_ok=True)
 
     class Handler(BaseHTTPRequestHandler):
@@ -428,14 +570,14 @@ def serve(state):
             pass
 
         def do_GET(self):
-            if self.headers.get("Host") not in {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}:
+            if self.headers.get("Host") not in allowed_hosts(port):
                 self.send_error(403)
                 return
             if self.path == "/":
                 raw = Path(__file__).with_name("progress_page.html").read_bytes()
                 content_type = "text/html; charset=utf-8"
             elif self.path == "/api/health":
-                raw = json.dumps({"identity": IDENTITY, "port": PORT, "pid": os.getpid(), "state_dir": str(state)}).encode()
+                raw = json.dumps({"identity": IDENTITY, "port": port, "url": service_url(port), "pid": os.getpid(), "state_dir": str(state)}).encode()
                 content_type = "application/json"
             elif self.path == "/api/tasks":
                 try:
@@ -456,28 +598,46 @@ def serve(state):
             self.end_headers()
             self.wfile.write(raw)
 
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    atomic(state / "服务状态.json", {"identity": IDENTITY, "port": PORT, "pid": os.getpid(), "script": str(Path(__file__).resolve()), "started_at": now()})
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler, bind_and_activate=False)
+    try:
+        if os.name == "nt":
+            server.allow_reuse_address = False
+            server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        server.server_bind()
+        server.server_activate()
+    except Exception:
+        server.server_close()
+        raise
+    save_port(state, port)
+    atomic(state / "服务状态.json", {"identity": IDENTITY, "port": port, "pid": os.getpid(), "script": str(Path(__file__).resolve()), "started_at": now()})
     server.serve_forever()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["ensure", "serve", "register"])
+    parser.add_argument("command", choices=["ensure", "serve", "register", "ports", "configure"])
     parser.add_argument("--state-dir", type=Path, default=DEFAULT)
+    parser.add_argument("--port", type=port_value)
+    parser.add_argument("--scan-start", type=port_value, default=PORT)
     parser.add_argument("--task-id")
     parser.add_argument("--title")
     parser.add_argument("--file", type=Path)
     args = parser.parse_args()
     if args.command == "serve":
-        serve(args.state_dir)
+        serve(args.state_dir, args.port)
     elif args.command == "ensure":
-        ensure(args.state_dir)
-        print(f"http://127.0.0.1:{PORT}/")
+        result = ensure(args.state_dir, args.port)
+        print(result["url"])
+    elif args.command == "ports":
+        print(json.dumps({"selected": inspect_port(args.state_dir, args.port), "active_port": active_service_port(args.state_dir), "available_ports": free_ports(args.scan_start)}, ensure_ascii=False, indent=2))
+    elif args.command == "configure":
+        if args.port is None:
+            parser.error("configure 需要 --port，由用户选择端口")
+        print(json.dumps(configure_port(args.state_dir, args.port), ensure_ascii=False, indent=2))
     else:
         if not all([args.task_id, args.title, args.file]):
             parser.error("register 需要 --task-id、--title 和 --file")
-        register_source(args.task_id, args.title, args.file, args.state_dir)
+        register_source(args.task_id, args.title, args.file, args.state_dir, port=args.port)
 
 
 if __name__ == "__main__":

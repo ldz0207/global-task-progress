@@ -5,6 +5,7 @@
 param(
     [string]$PythonPath,
     [string]$StateDir,
+    [ValidateRange(1,65535)][int]$Port,
     [switch]$InstallMissing
 )
 
@@ -101,10 +102,11 @@ function Resolve-ProgressPython {
 }
 
 function Invoke-ProgressSetup {
-    param([string]$SelectedPython, [string]$SelectedState, [switch]$AllowInstall)
+    param([string]$SelectedPython, [string]$SelectedState, [int]$SelectedPort, [switch]$AllowInstall)
     $runtime = Resolve-ProgressPython -ExplicitPath $SelectedPython -AllowInstall:$AllowInstall
     $arguments = @('-X','utf8','-B',(Join-Path $PSScriptRoot 'check_environment.py'))
     if ($SelectedState) { $arguments += @('--state-dir',$SelectedState) }
+    if ($SelectedPort) { $arguments += @('--port',[string]$SelectedPort,'--select-port') }
     $reportText = & $runtime.executable @arguments
     $code = $LASTEXITCODE
     $reportText | Write-Output
@@ -117,7 +119,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     # Keep JSON output separate from the process return code.
     $ErrorActionPreference = 'Stop'
     try {
-        $result = @(Invoke-ProgressSetup -SelectedPython $PythonPath -SelectedState $StateDir -AllowInstall:$InstallMissing)
+        $result = @(Invoke-ProgressSetup -SelectedPython $PythonPath -SelectedState $StateDir -SelectedPort $Port -AllowInstall:$InstallMissing)
         $result | Select-Object -SkipLast 1 | Write-Output
         exit [int]$result[-1]
     } catch {
