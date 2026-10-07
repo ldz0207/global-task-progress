@@ -51,6 +51,8 @@ with r.pulse():
 
 ## 页面功能验收（按需）
 
+用户需要Windows桌面服务启停入口时，用 `scripts/install_desktop_control.ps1` 创建原生控制面板和快捷方式；已有服务须显式沿用实际 `-BackendScript`、`-StateDir` 和通过检测的 `-PythonPath`，不更换业务适配脚本。面板和安装默认只检查状态；停止操作仅针对身份、目录、端口、启动记录和实际进程都匹配的看板服务，保留worker和任务数据。端口从现行配置读取；关闭面板不停止服务，新任务可能按需重新启动。不自动添加开机启动。详情和使用方法见 [references/integration.md](references/integration.md) 的「桌面服务控制」。
+
 页面默认每 2 秒刷新，右上角可输入 1–300 秒并点击「应用」。当前未结束任务优先，终态历史默认折叠。每个任务有独立的「收起详情 / 展开详情」，只影响该任务；收起时保留名称、状态、置顶、当前阶段提示及一条主进度，不把阶段进度伪装成整个任务完成。上方「展开全部 / 收起全部」统一设置任务详情；展开全部同时打开阶段表，但不打开历史列表本身。提供每任务置顶和最近更新、需要关注、进度较少、名称、手动排序；置顶任务在各自区域始终优先。每条任务可「↑ 上移 / ↓ 下移」，点击后以当前显示顺序切换为手动排序；当前/历史分别处理，置顶与普通任务各自在组内移动，边界按钮禁用。新任务追加到所属组末，暂时消失的任务保留原顺序；可切回自动排序，手动顺序继续保存。刷新间隔、每任务展开选择、置顶和排序保存在本浏览器，旧版偏好兼容迁移，业务状态保持真实。
 
 每个任务使用稳定 ID 保留 DOM 节点和按钮；刷新、置顶、上下移动、排序和单任务详情切换不重建 `<details>`，保留用户在本次页面中的阶段展开/折叠选择。「展开全部」是用户明确要求批量打开阶段表，可以改变阶段开合。连接中断时隐藏旧数字并显示异常，恢复后继续使用原节点。长刷新间隔下，页面仍每秒在本地检查记录是否超过 90 秒并停止旧速度/ETA；此检查不发起网络请求、不调用 PowerShell/CMD。
@@ -62,6 +64,7 @@ with r.pulse():
 - [scripts/task_progress.py](scripts/task_progress.py)：标准库 Reporter、JSON 来源注册、固定端口服务。
 - [scripts/setup.ps1](scripts/setup.ps1) / [scripts/check_environment.py](scripts/check_environment.py)：首次安装检测、缺失 Python 安装及安装后复检；不启动业务任务。
 - [scripts/progress_page.html](scripts/progress_page.html)：当前任务、折叠历史、保持详情状态的看板。
+- [scripts/install_desktop_control.ps1](scripts/install_desktop_control.ps1) / [scripts/control_service.ps1](scripts/control_service.ps1)：Windows桌面原生面板及经过身份核对的服务启停，源码在 `scripts/ServiceControl.cs`。
 - [scripts/example_worker.py](scripts/example_worker.py)：小型真实复制、SHA-256 校验、清单发布示例，支持用原 ID 和 `--resume` 重新核验检查点后继续。
 - [scripts/worker_helpers.py](scripts/worker_helpers.py)：有限重试、SQLite 检查点、重复 worker 防护及有界线程提交。
 - [scripts/resource_probe.py](scripts/resource_probe.py)：Windows 只读内存/CPU 采样，区分进度服务、浏览器和业务进程；需要核对资源开销时使用。

@@ -61,6 +61,25 @@ python scripts/task_progress.py register --task-id existing-job --title '已有�
 
 来源应显式提供 `stage`、`status`、`done`、`total`、`unit`、`updated_ts`（Unix 秒）或带时区的 `updated_at`。可提供 `stages` 字典、`speed`（单位/秒）和 `eta_seconds`。缺少更新时间使用文件修改时间；不得把每次读取时间当作 worker 心跳。没有明确速度时等待测量，不用累计历史完成量推算恢复后的速度。相同 ID 若已有本地记录，不允许再注册来源造成冲突。
 
+## 桌面服务控制
+
+Windows首次安装桌面入口：
+
+```powershell
+# 使用已检测通过的Python；已有服务明确指定原脚本及数据目录。
+scripts/install_desktop_control.ps1 -PythonPath 'C:/实际解释器/python.exe' -BackendScript 'D:/原服务/task_progress.py' -StateDir 'D:/实际运行数据'
+# 不打开窗口也可使用同一控制逻辑。
+scripts/control_service.ps1 -Action status -BackendScript 'D:/原服务/task_progress.py' -StateDir 'D:/实际运行数据'
+scripts/control_service.ps1 -Action start -PythonPath 'C:/实际解释器/python.exe' -BackendScript 'D:/原服务/task_progress.py' -StateDir 'D:/实际运行数据'
+scripts/control_service.ps1 -Action stop -BackendScript 'D:/原服务/task_progress.py' -StateDir 'D:/实际运行数据'
+```
+
+安装器检测现有Python和Windows内置.NET Framework编译器，把控制面板生成在数据目录同主题的 `work/桌面服务控制/`，用系统返回的实际桌面目录创建「任务进度服务」快捷方式；可显式传入 `-OutputDir` 或 `-DesktopDir`。不覆盖同名非本技能快捷方式，不添加启动项，不因安装而改变服务启停。快捷方式保留解释器、服务脚本和数据目录的绝对路径，端口从配置读取；路径迁移后重新运行安装器更新入口。
+
+面板提供「启动服务」「停止服务」「打开看板」「刷新状态」。每5秒由面板自身读取健康API，无周期性shell进程；启停按钮才调用一次控制脚本，实际动作期间禁用按钮以免重复提交。打开看板使用用户默认浏览器。停止前核对身份、端口、数据目录、启动记录、脚本、实际命令行和进程创建时间，并保持目标进程句柄，防止旧PID被复用后误停其他程序。记录不一致、其他端口仍有同目录服务、端口冲突或目标变化时停止操作并显示原因。
+
+停止只关闭看板服务，保留所有任务文件和业务worker；业务继续更新记录，恢复服务后重新显示。关闭面板不停止服务，关闭网页也不停止任务。新Reporter接入可能按需再次启动看板；此按钮不提供「永久禁止自动启动」或业务取消。启停验收用独立目录/测试端口完成，不为验证按钮而中断正在使用的真实看板。
+
 ## 暂停与恢复
 
 立即调用 `stop('paused', ...)`，异常用 `failed`，取消用 `cancelled`。恢复同 ID、同阶段和真实检查点计数，保留完成的其他阶段；恢复时重置速度采样，不让停机时间或历史完成量抬高速率。普通计数倒退会被拒绝。业务明确需要再次执行某阶段时，使用 `begin_stage_attempt(stage, done, total, reason='具体原因', unit='项')`：沿用任务 ID，把该阶段旧记录保存到 `attempts`，重置此阶段采样和计数，其他阶段保留。这个操作必须有业务依据，不能用于掩盖未通过的验证。

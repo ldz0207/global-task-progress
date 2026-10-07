@@ -48,15 +48,23 @@ $progressPython = 'C:\检测报告中的实际位置\python.exe'
 
 默认 Windows 数据目录：`D:/Codex/维护/统一任务进度/运行数据`。其他系统必须显式指定绝对路径；可使用 `--state-dir` 或 `TASK_PROGRESS_STATE_DIR`。端口选项支持 `--port`、`TASK_PROGRESS_PORT` 和数据目录内的 `服务配置.json`，后续 Reporter 自动读取；默认8790。已有同目录服务在线时，继续复用其端口，切换前明确停止旧服务；本仓库不会自动聚合其他设备上的服务。具体业务接入、端口选择、接续和后台执行见 [接入说明](references/integration.md)。
 
+## Windows 桌面服务按钮
+
+运行 `scripts/install_desktop_control.ps1 -PythonPath '已检测通过的Python绝对路径'`，在当前用户实际桌面创建「任务进度服务」快捷方式。双击打开原生小面板，可启动、停止、打开看板或刷新状态。安装入口和打开面板只读取状态，不改变服务启停；已运行时重复启动复用原进程。面板每5秒直接读健康API，不反复启动PowerShell；仅点击启停时调用一次控制脚本，关闭面板后也不占用轮询资源。
+
+已有业务适配服务时，加上 `-BackendScript '原服务脚本绝对路径' -StateDir '原数据目录'`，保留原脚本和真实任务来源，不能用通用模块替换。端口每次从现行配置读取，不在快捷方式中写死8790。停止前核对健康身份、目录、端口、启动记录及实际进程；只终止对应看板服务，保留任务记录和业务worker。关闭面板不停止服务；后续新任务接入可能按需重新启动服务。不添加开机启动。此入口使用Windows内置.NET Framework/WinForms及PowerShell，无额外常驻服务；编译器不可用时可直接使用 `control_service.ps1 -Action status/start/stop`。
+
 ## 验证与维护
 
 ```powershell
 python -B -m unittest discover -s tests -v
 node tests/test_page.cjs
+# Windows 桌面控制：独立目录/端口测试，不停止当前业务看板。
+powershell -NoProfile -File tests/test_service_control.ps1 -PythonPath '已检测通过的Python绝对路径'
 ```
 
 测试通过独立临时数据目录验证计数、暂停恢复、短窗口速率、陈旧状态和接入冲突，不占用新的端口。页面代码修改时，还需在实际浏览器验证相关功能；普通任务跟进和纯说明更新只核对底层数据或文档。
 
-v0.3.1 增加每任务上移/下移及保存手动顺序，保留端口选择、独立详情、自定义刷新和执行保障；仍只依赖 Python 标准库。[执行保障与资源选择](references/worker-reliability.md)说明适用范围和恢复方法。[同类方案比较](references/alternatives.md)保留检索与热度依据。
+v0.3.2 增加Windows桌面服务启停入口，保留每任务上移/下移、手动顺序、端口选择、独立详情、自定义刷新和执行保障；进度核心仍只依赖 Python 标准库。[执行保障与资源选择](references/worker-reliability.md)说明适用范围和恢复方法。[同类方案比较](references/alternatives.md)保留检索与热度依据。
 
 独立仓库用于后续版本维护。更新先修改本地源码、运行必要测试、核对正在运行的服务，再上传；升级不会自动替换既有长期服务或正在运行的业务worker。
