@@ -18,14 +18,23 @@ C:/Users/<用户名>/.codex/skills/global-task-progress/
 
 重新打开会话后调用 `$global-task-progress`，或要求为批量任务接入统一实时进度。正式入口是 [SKILL.md](SKILL.md)。其他支持 `SKILL.md` 的工具可使用相同目录结构，但其自动发现行为需在对应工具中核验。
 
+首次启用先检查环境。Windows 可以从技能根目录运行：
+
+```powershell
+.\scripts\setup.ps1 -InstallMissing
+```
+
+检测 Python 3.10+、标准库及 SQLite/SHA-256 功能、目录权限、技能文件和固定端口；已有环境复用，缺少可用 Python 时才通过 WinGet 安装完整运行时并复检。报告中的解释器绝对路径用于后续命令；不要求 PATH 已配置。不同数据目录、无 WinGet、D 盘不可用或其他系统，见 [环境与安装说明](references/environment.md)。运行无需第三方 pip 包，Node 等开发工具不作为用户安装条件。
+
 ## 使用
 
 Python 3.10+，运行脚本无需第三方包。已有健康服务时优先复用，避免覆盖正在运行的进度页面。
 
 ```powershell
-python scripts/task_progress.py ensure
-python scripts/example_worker.py --work-dir 'D:/Codex/维护/统一任务进度/work/新的演示目录' --task-id 'progress-example'
-python scripts/example_worker.py --work-dir 'D:/Codex/维护/统一任务进度/work/新的演示目录' --task-id 'progress-example' --resume
+$progressPython = 'C:\检测报告中的实际位置\python.exe'
+& $progressPython scripts/task_progress.py ensure
+& $progressPython scripts/example_worker.py --work-dir 'D:/Codex/维护/统一任务进度/work/新的演示目录' --task-id 'progress-example'
+& $progressPython scripts/example_worker.py --work-dir 'D:/Codex/维护/统一任务进度/work/新的演示目录' --task-id 'progress-example' --resume
 ```
 
 默认 Windows 数据目录：`D:/Codex/维护/统一任务进度/运行数据`。其他系统必须显式指定绝对路径；可使用 `--state-dir` 或 `TASK_PROGRESS_STATE_DIR`。入口始终固定为本机 8790；本仓库不会自动聚合其他设备上的服务。具体业务接入、接续和后台执行见 [接入说明](references/integration.md)。
@@ -39,6 +48,6 @@ node tests/test_page.cjs
 
 测试通过独立临时数据目录验证计数、暂停恢复、短窗口速率、陈旧状态和接入冲突，不占用新的端口。页面还需在实际浏览器验证自动刷新和详情展开状态。
 
-v0.2.1 增加自定义刷新间隔和当前任务精简视图，沿用 v0.2.0 的高频计数合并上报、有限速率采样、SQLite检查点、有限重试、重复worker防护和有界线程提交；仍只依赖 Python 标准库。[执行保障与资源选择](references/worker-reliability.md)说明适用范围和恢复方法。[同类方案比较](references/alternatives.md)保留检索与热度依据。
+v0.2.2 增加首次安装检测和缺失运行时安装复检，保留自定义刷新间隔和当前任务精简视图，沿用 v0.2.0 的高频计数合并上报、有限速率采样、SQLite检查点、有限重试、重复worker防护和有界线程提交；仍只依赖 Python 标准库。[执行保障与资源选择](references/worker-reliability.md)说明适用范围和恢复方法。[同类方案比较](references/alternatives.md)保留检索与热度依据。
 
 独立仓库用于后续版本维护。更新先修改本地源码、运行必要测试、核对正在运行的服务，再上传；升级不会自动替换既有长期服务或正在运行的业务worker。

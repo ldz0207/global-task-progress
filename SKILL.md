@@ -7,6 +7,8 @@ description: 为持续运行、批量或多阶段任务提供统一的本机实�
 
 ## 开始前
 
+首次安装、换设备或出现依赖错误时，先读 [references/environment.md](references/environment.md)。Windows 运行 `scripts/setup.ps1` 检测；用户已要求安装/首次启用时，用 `-InstallMissing` 补齐缺失的完整 Python 并复检。其他平台用 `scripts/check_environment.py`，按实际系统和当前安装授权补齐缺失项。复用已有解释器及业务环境，只安装真实缺项；Python 标准库不能当作 pip 包安装，Node、PyYAML、Celery、Redis不是运行必需项。检查通过后沿用报告中的解释器绝对路径；失败时先解决具体缺项或冲突，不开始 worker。
+
 1. 读取已有任务、脚本和 `/api/health`。固定入口为 `http://127.0.0.1:8790/`；健康身份应为 `agent-global-progress-v1`。复用现行服务和运行数据目录。端口被其他程序占用或目录不一致时，说明冲突，不改随机端口、不终止其他任务。
 2. 确定稳定 `task_id`、实际总量、计数单位和验收阶段。接续任务沿用原 ID、已核验结果和完成量。总量未知使用 `None`，不捏造分母或百分比。
 3. 在业务工作开始前用 `Reporter.update()` 登记。一个任务 ID 对应一个业务写入者；多个独立任务用不同 ID。
@@ -50,6 +52,7 @@ with r.pulse():
 ## 配套资源
 
 - [scripts/task_progress.py](scripts/task_progress.py)：标准库 Reporter、JSON 来源注册、固定端口服务。
+- [scripts/setup.ps1](scripts/setup.ps1) / [scripts/check_environment.py](scripts/check_environment.py)：首次安装检测、缺失 Python 安装及安装后复检；不启动业务任务。
 - [scripts/progress_page.html](scripts/progress_page.html)：当前任务、折叠历史、保持详情状态的看板。
 - [scripts/example_worker.py](scripts/example_worker.py)：小型真实复制、SHA-256 校验、清单发布示例，支持用原 ID 和 `--resume` 重新核验检查点后继续。
 - [scripts/worker_helpers.py](scripts/worker_helpers.py)：有限重试、SQLite 检查点、重复 worker 防护及有界线程提交。
