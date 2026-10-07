@@ -11,7 +11,7 @@ function load(store = new Map()) {
   const context = vm.createContext({
     localStorage: {getItem: key => store.get(key), setItem: (key, value) => store.set(key, value)},
   });
-  return vm.runInContext(definitions + '\n({compareRows,prefs,pinned,savePrefs,pct,count,eta,normalizeRefreshSeconds,staleTask,phases,rate,taskExpanded,setTaskExpanded,setAllTasksExpanded})', context);
+  return vm.runInContext(definitions + '\n({compareRows,prefs,pinned,savePrefs,pct,count,eta,normalizeRefreshSeconds,staleTask,phases,rate,taskExpanded,setTaskExpanded,setAllTasksExpanded,normalizeOrder,orderedRows,moveNeighbors,moveTask})', context);
 }
 const store = new Map();
 const page = load(store);
@@ -19,7 +19,7 @@ const row = (id, status, done, updated, title = id) => ({id, task:{task_id:id,st
 const running = row('run','running',8,200,'乙');
 const attention = row('check','attention',2,100,'甲');
 let checks = 0;
-for (const mode of ['updated','attention','progress','name']) {
+for (const mode of ['updated','attention','progress','name','manual']) {
   page.prefs.sort = mode;
   page.pinned.add('run');
   assert(page.compareRows(running, attention) < 0, 'Pinned task must lead in every sort');
@@ -99,4 +99,55 @@ details.setTaskExpanded('__proto__',true);details.savePrefs();
 assert.equal(load(detailStore).taskExpanded('__proto__'),true);assert.equal(details.taskExpanded('toString'),false);checks++;
 const invalidDetails=load(new Map([['global-task-progress-ui-v1',JSON.stringify({expanded:{run:true,check:'false',other:1}})]]));
 assert.equal(invalidDetails.taskExpanded('run'),true);assert.equal(Object.keys(invalidDetails.prefs.expanded).length,1);checks++;
+const moveStore=new Map();
+const manual=load(moveStore);
+const jobs=[row('a','running',2,300),row('b','paused',4,200),row('c','attention',6,100),row('h1','complete',10,400),row('h2','cancelled',3,500)].map(row=>row.task);
+const ids=(rows)=>Array.from(rows,row=>row.id);
+const currentIds=(page,tasks)=>ids(page.orderedRows(tasks).filter(row=>!['complete','cancelled','failed','idle'].includes(row.task.status)));
+assert.deepEqual(currentIds(manual,jobs),['a','b','c']);checks++;
+assert.equal(manual.moveTask(jobs,'b','up'),true);
+assert.equal(manual.prefs.sort,'manual');assert.deepEqual(currentIds(manual,jobs),['b','a','c']);checks++;
+assert.equal(manual.moveTask(jobs,'b','up'),false);assert.equal(manual.moveTask(jobs,'c','down'),false);
+assert.equal(manual.moveTask(jobs,'missing','up'),false);assert.equal(manual.moveTask(jobs,'a','sideways'),false);checks++;
+assert.equal(manual.moveTask(jobs,'b','down'),true);assert.deepEqual(currentIds(manual,jobs),['a','b','c']);checks++;
+manual.setTaskExpanded('b',false);manual.prefs.refreshSeconds=7;manual.savePrefs();
+const manualReopened=load(moveStore);
+assert.equal(manualReopened.prefs.sort,'manual');assert.deepEqual(currentIds(manualReopened,jobs.slice().reverse()),['a','b','c']);
+assert.equal(manualReopened.taskExpanded('b'),false);assert.equal(manualReopened.prefs.refreshSeconds,7);checks++;
+const changedTimes=jobs.map(task=>({...task,updated_ts:task.task_id==='c'?10000:1}));
+assert.deepEqual(currentIds(manualReopened,changedTimes),['a','b','c']);checks++;
+const newcomer=row('new','running',0,20000).task;
+assert.deepEqual(currentIds(manualReopened,[newcomer,...changedTimes]),['a','b','c','new']);checks++;
+assert.deepEqual(currentIds(load(moveStore),[newcomer,...jobs]),['a','b','c','new']);checks++;
+assert.deepEqual(currentIds(manualReopened,jobs.filter(task=>task.task_id!=='b')),['a','c']);
+assert.deepEqual(currentIds(manualReopened,jobs),['a','b','c']);checks++;
+const beforeHistory=currentIds(manualReopened,jobs);
+assert.equal(manualReopened.moveTask(jobs,'h1','up'),true);
+assert.deepEqual(ids(manualReopened.orderedRows(jobs).filter(row=>['complete','cancelled'].includes(row.task.status))),['h1','h2']);
+assert.deepEqual(currentIds(manualReopened,jobs),beforeHistory);checks++;
+manualReopened.pinned.add('b');
+assert.deepEqual(currentIds(manualReopened,jobs),['b','a','c']);
+assert.equal(manualReopened.moveTask(jobs,'b','down'),false);assert.equal(manualReopened.moveTask(jobs,'a','up'),false);checks++;
+manualReopened.pinned.add('c');
+assert.equal(manualReopened.moveTask(jobs,'c','up'),true);assert.deepEqual(currentIds(manualReopened,jobs),['c','b','a']);checks++;
+manualReopened.pinned.add('h2');
+assert.equal(manualReopened.moveTask(jobs,'h2','down'),false);assert.equal(manualReopened.moveTask(jobs,'h1','up'),false);
+assert.deepEqual(currentIds(manualReopened,jobs),['c','b','a']);checks++;
+manualReopened.prefs.sort='updated';
+assert.deepEqual(currentIds(manualReopened,jobs),['b','c','a']);
+manualReopened.prefs.sort='manual';assert.deepEqual(currentIds(manualReopened,jobs),['c','b','a']);checks++;
+manualReopened.pinned.clear();
+const completedB=jobs.map(task=>task.task_id==='b'?{...task,status:'complete'}:task);
+assert.deepEqual(currentIds(manualReopened,completedB),['a','c']);
+const neighbors=manualReopened.moveNeighbors(manualReopened.orderedRows(completedB));
+assert.equal(neighbors.get('a').up,undefined);assert.equal(neighbors.get('a').down,'c');assert.equal(neighbors.get('c').down,undefined);checks++;
+const malformedOrder=load(new Map([['global-task-progress-ui-v1',JSON.stringify({sort:'manual',order:['b',null,'b',1,'a','__proto__']})]]));
+assert.deepEqual(Array.from(malformedOrder.prefs.order),['b','a','__proto__']);assert.deepEqual(currentIds(malformedOrder,jobs),['b','a','c']);checks++;
+assert.deepEqual(Array.from(legacy.prefs.order),[]);
+assert.deepEqual(Array.from(manual.normalizeOrder({a:1})),[]);checks++;
+const invalidMove=load(new Map([['global-task-progress-ui-v1',JSON.stringify({sort:'updated'})]]));
+assert.equal(invalidMove.moveTask(jobs,'a','up'),false);assert.equal(invalidMove.prefs.sort,'updated');checks++;
+const temporarilyAbsent=load(new Map([['global-task-progress-ui-v1',JSON.stringify({sort:'manual',order:['a','b','c']})]]));
+assert.equal(temporarilyAbsent.moveTask(jobs.filter(task=>task.task_id!=='b'),'a','down'),true);
+assert.deepEqual(currentIds(temporarilyAbsent,jobs),['c','b','a']);checks++;
 console.log(`Page behavior: ${checks} checks passed`);
