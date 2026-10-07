@@ -11,7 +11,7 @@ function load(store = new Map()) {
   const context = vm.createContext({
     localStorage: {getItem: key => store.get(key), setItem: (key, value) => store.set(key, value)},
   });
-  return vm.runInContext(definitions + '\n({compareRows,prefs,pinned,savePrefs,pct,count,eta,normalizeRefreshSeconds,staleTask,phases,rate})', context);
+  return vm.runInContext(definitions + '\n({compareRows,prefs,pinned,savePrefs,pct,count,eta,normalizeRefreshSeconds,staleTask,phases,rate,taskExpanded,setTaskExpanded,setAllTasksExpanded})', context);
 }
 const store = new Map();
 const page = load(store);
@@ -76,4 +76,27 @@ const expiredPhases=page.phases({...stale,stage:'校验',unit:'份',stages:[
 assert.equal(expiredPhases[0].status,'complete');assert.equal(expiredPhases[1].status,'attention');
 assert(page.rate(expiredPhases[1]).includes('停止测量'));
 assert(page.eta(expiredPhases[1]).includes('停止估计'));checks++;
+const detailStore=new Map([['global-task-progress-ui-v1',JSON.stringify({compact:true,sort:'name',pins:['run'],refreshSeconds:7})]]);
+const details=load(detailStore);
+assert.equal(details.taskExpanded('run'),false);assert.equal(details.taskExpanded('check'),false);checks++;
+details.setTaskExpanded('run',true);
+assert.equal(details.taskExpanded('run'),true);assert.equal(details.taskExpanded('check'),false);checks++;
+details.savePrefs();
+const detailReopened=load(detailStore);
+assert.equal(detailReopened.taskExpanded('run'),true);assert.equal(detailReopened.taskExpanded('check'),false);
+assert.equal(detailReopened.prefs.sort,'name');assert.equal(detailReopened.prefs.refreshSeconds,7);assert(detailReopened.pinned.has('run'));checks++;
+details.setTaskExpanded('check',true);details.setTaskExpanded('run',false);
+assert.equal(details.taskExpanded('run'),false);assert.equal(details.taskExpanded('check'),true);checks++;
+details.setAllTasksExpanded(true);
+assert.equal(details.taskExpanded('run'),true);assert.equal(details.taskExpanded('check'),true);assert.equal(details.taskExpanded('new-task'),true);
+assert.equal(Object.keys(details.prefs.expanded).length,0);checks++;
+details.setTaskExpanded('run',false);details.setAllTasksExpanded(false);
+assert.equal(details.taskExpanded('run'),false);assert.equal(details.taskExpanded('check'),false);assert.equal(details.taskExpanded('new-task'),false);checks++;
+details.savePrefs();
+assert.equal(load(detailStore).taskExpanded('new-task'),false);
+assert.equal(details.prefs.refreshSeconds,7);assert.equal(details.prefs.sort,'name');assert(details.pinned.has('run'));checks++;
+details.setTaskExpanded('__proto__',true);details.savePrefs();
+assert.equal(load(detailStore).taskExpanded('__proto__'),true);assert.equal(details.taskExpanded('toString'),false);checks++;
+const invalidDetails=load(new Map([['global-task-progress-ui-v1',JSON.stringify({expanded:{run:true,check:'false',other:1}})]]));
+assert.equal(invalidDetails.taskExpanded('run'),true);assert.equal(Object.keys(invalidDetails.prefs.expanded).length,1);checks++;
 console.log(`Page behavior: ${checks} checks passed`);
