@@ -72,3 +72,7 @@ powershell -NoProfile -File tests/test_service_control.ps1 -PythonPath '已检�
 v0.3.4 保留四块全局统计，在大任务内部按8条阈值折叠已完成子任务；核心进度、速度和当前阶段ETA继续可见，详情和查看设置按需展开。继续支持Windows桌面服务启停、每任务上移/下移、手动顺序、端口选择和执行保障；进度核心仍只依赖 Python 标准库。[执行保障与资源选择](references/worker-reliability.md)说明适用范围和恢复方法。[同类方案比较](references/alternatives.md)保留检索与热度依据。
 
 独立仓库用于后续版本维护。更新先修改本地源码、运行必要测试、核对正在运行的服务，再上传；升级不会自动替换既有长期服务或正在运行的业务worker。
+
+## 设计讨论
+
+[共享项目的阶段进度快照](references/milestone-snapshots.md)讨论阶段完成后的静态发布、项目归属和离线详情页。当前为候选设计，尚未实现或启用；本仓库只接收通用实现、说明与测试，真实项目进度保存在使用者自己的共享目录。
