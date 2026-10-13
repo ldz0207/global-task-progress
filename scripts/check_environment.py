@@ -111,7 +111,7 @@ def check_environment(state, *, runtime_only=False, port=None, select_port=False
     checks = {'runtime': runtime}
     if not runtime_only and runtime['ok']:
         folder = Path(__file__).resolve().parent
-        required = ('task_progress.py', 'worker_helpers.py', 'progress_page.html')
+        required = ('task_progress.py', 'worker_helpers.py', 'progress_page.html', 'codex_resume.py', 'codex_desktop.py')
         missing = [name for name in required if not (folder / name).is_file()]
         checks['skill_files'] = {'ok': not missing, 'missing': missing}
         checks['storage'] = storage_check(Path(state))

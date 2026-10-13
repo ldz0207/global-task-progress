@@ -89,12 +89,14 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_incomplete_skill_package_is_rejected(self):
         actual = Path.is_file
-        def is_file(path):
-            return False if path.name == 'progress_page.html' else actual(path)
-        with patch.object(Path, 'is_file', is_file), patch.object(env, 'service_check', return_value={'ok': True}):
-            report = env.check_environment(self.state)
-        self.assertFalse(report['ready'])
-        self.assertIn('progress_page.html', report['checks']['skill_files']['missing'])
+        for missing in ('progress_page.html', 'codex_resume.py', 'codex_desktop.py'):
+            with self.subTest(missing=missing):
+                def is_file(path):
+                    return False if path.name == missing else actual(path)
+                with patch.object(Path, 'is_file', is_file), patch.object(env, 'service_check', return_value={'ok': True}):
+                    report = env.check_environment(self.state)
+                self.assertFalse(report['ready'])
+                self.assertIn(missing, report['checks']['skill_files']['missing'])
 
 
 if __name__ == '__main__':
