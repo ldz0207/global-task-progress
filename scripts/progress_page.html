@@ -24,6 +24,12 @@ const fmt=v=>num(v)==null?'—':Number(v).toLocaleString('zh-CN',{maximumFractio
 const labels={running:'进行中',complete:'已完成',attention:'需要核对',error:'异常',failed:'异常',paused:'已暂停',idle:'暂无任务',cancelled:'已取消'};
 const status=s=>Object.hasOwn(labels,s)?s:'attention';
 const label=s=>labels[status(s)];
+function codexSummary(value){
+ const c=value||{},op=c.operation||{},busy=op.status==='running',pending=Number(c.pending_count)||0;
+ return {visible:c.enabled===true,busy,pending,disabled:busy||!c.app_online||pending===0||c.monitor_status==='error',
+  button:busy?'正在续接…':'继续退出前的对话（'+pending+'）',
+  text:c.monitor_status==='error'?(c.message||'记录器异常'):!c.app_online?'请先重新打开 Codex，再继续退出前的对话。':'正在运行 '+(Number(c.running_count)||0)+' 个 · 待恢复 '+pending+' 个'};
+}
 const stamp=s=>{if(!s)return '暂无更新';const d=new Date(s);return Number.isNaN(d.getTime())?'暂无更新':d.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+' 北京时间'};
 const duration=v=>{const s=num(v);if(s==null||s<0)return '等待速度测量';if(s===0)return '0 秒';if(s<60)return Math.ceil(s)+' 秒';if(s<3600)return Math.ceil(s/60)+' 分钟';return Math.floor(s/3600)+' 小时 '+Math.ceil(s%3600/60)+' 分钟'};
 const halted=s=>['paused','attention','failed','error','cancelled','idle'].includes(s);
@@ -195,6 +201,22 @@ function renderList(container,rows){
  for(const row of rows){const node=renderCard(row.task,row.id);for(const direction of ['up','down']){const button=node.querySelector('[data-direction="'+direction+'"]');button.disabled=neighbors.get(row.id)[direction]==null;button.title=button.disabled?(direction==='up'?'已在本组最前':'已在本组最后'):'在本组'+(direction==='up'?'上移':'下移')+'一位';}if(node===cursor)cursor=cursor.nextElementSibling;else container.insertBefore(node,cursor);}
  for(const node of Array.from(container.children))if(!wanted.has(node.dataset.taskId))node.remove();
 }
+const codexPanel=document.createElement('section');codexPanel.className='card';codexPanel.hidden=true;codexPanel.setAttribute('aria-label','Codex 对话续接');
+codexPanel.innerHTML='<div class="taskhead"><h2>Codex 对话续接</h2><button id="codexResume" type="button" disabled>继续退出前的对话（0）</button></div><p id="codexSummary" class="muted" role="status"></p><p id="codexOperation" class="message" role="status"></p><details class="stages" id="codexDetails"><summary>对话与续接结果</summary><div id="codexRows" class="message"></div></details>';
+el('overview').after(codexPanel);let codexToken=null;
+function renderCodex(c){
+ const view=codexSummary(c);codexPanel.hidden=!view.visible;if(!view.visible)return;
+ codexToken=c.token;el('codexResume').disabled=view.disabled;el('codexResume').textContent=view.button;
+ el('codexSummary').textContent=view.text;
+ const op=c.operation||{};el('codexOperation').textContent=(op.stage?op.stage+(op.total==null?'':' '+(op.done||0)+'/'+op.total)+'：':'')+(op.message||'记录功能随看板运行；点击按钮后才会发送继续消息。');
+ const rows=[...(c.pending||[]).map(r=>'待恢复：'+r.name),...(c.active||[]).map(r=>'运行中：'+r.name),...(op.results||[]).map(r=>r.name+'：'+r.result)];
+ el('codexRows').textContent=rows.join('\n')||'没有待恢复对话。';
+}
+el('codexResume').addEventListener('click',async()=>{
+ const button=el('codexResume');if(button.disabled)return;button.disabled=true;
+ try{const response=await fetch('/api/codex/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:codexToken})});const value=await response.json();if(!response.ok)throw Error(value.error||'续接请求未受理');renderCodex(value);tick();}
+ catch(error){el('codexOperation').textContent=error.message;tick();}
+});
 async function tick(){
  if(loading)return;loading=true;
  try{
@@ -206,12 +228,14 @@ async function tick(){
   if(!Number.isFinite(observed)||Date.now()-observed>90000)throw Error('进度来源超过90秒未刷新');
   const tasks=snapshot.tasks.map(task=>staleTask(task));
   displayTasks(tasks);
+  renderCodex(snapshot.codex);
   ui.panels.hidden=false;ui.overview.hidden=false;ui.error.hidden=true;
   el('connection').className='live';el('connection').textContent=prefs.refreshSeconds+' 秒刷新';
   ui.stamp.textContent='页面刷新：'+stamp(new Date().toISOString())+' · 数据采样：'+stamp(snapshot.observed_at||snapshot.updated_at);
  }catch(error){
   // Preserve the existing task nodes and expansion state across refreshes and outages.
   ui.panels.hidden=true;ui.overview.hidden=true;ui.error.hidden=false;ui.error.textContent=(error.name==='AbortError'?'获取进度超时':error.message)+'，正在重试。';
+  codexPanel.hidden=true;
   el('connection').className='live error';el('connection').textContent='连接中断';
  }finally{loading=false;}
 }

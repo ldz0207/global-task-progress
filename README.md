@@ -18,7 +18,7 @@ Agent 日常跟进直接读取底层 API、任务记录、检查点、日志和�
 
 ## 安装
 
-这是私有仓库，需要先用自己已有的 GitHub 授权将仓库下载或克隆到本地。把仓库根目录中的 `SKILL.md`、`agents/`、`scripts/`、`references/` 放到 Codex 技能目录的 `global-task-progress/` 内，例如：
+下载或克隆本仓库，把根目录中的 `SKILL.md`、`agents/`、`scripts/`、`references/` 放到 Codex 技能目录的 `global-task-progress/` 内，例如：
 
 ```text
 C:/Users/<用户名>/.codex/skills/global-task-progress/
@@ -57,6 +57,12 @@ $progressPython = 'C:\检测报告中的实际位置\python.exe'
 运行 `scripts/install_desktop_control.ps1 -PythonPath '已检测通过的Python绝对路径'`，在当前用户实际桌面创建「任务进度服务」快捷方式。双击打开原生小面板，可启动、停止、打开看板或刷新状态。安装入口和打开面板只读取状态，不改变服务启停；已运行时重复启动复用原进程。面板每5秒直接读健康API，不反复启动PowerShell；仅点击启停时调用一次控制脚本，关闭面板后也不占用轮询资源。
 
 已有业务适配服务时，加上 `-BackendScript '原服务脚本绝对路径' -StateDir '原数据目录'`，保留原脚本和真实任务来源，不能用通用模块替换。端口每次从现行配置读取，不在快捷方式中写死8790。停止前核对健康身份、目录、端口、启动记录及实际进程；只终止对应看板服务，保留任务记录和业务worker。关闭面板不停止服务；后续新任务接入可能按需重新启动服务。不添加开机启动。此入口使用Windows内置.NET Framework/WinForms及PowerShell，无额外常驻服务；编译器不可用时可直接使用 `control_service.ps1 -Action status/start/stop`。
+
+## 在看板继续 Codex 对话
+
+可选启用 Windows Codex 退出前记录与手动续接。在同一个看板进程、端口和状态目录内记录运行中的主对话，重开 Codex后点击“继续退出前的对话”；已完成、已手动续接、仍在运行的工作会跳过。发送前持久化收据，未确认时停止本批，避免重复执行。自动刷新只读状态，记录器不调用模型；续接保留原对话模型与权限。无需另装恢复窗口或单独记录进程。
+
+开启、停用、现有实现迁移与实际验收边界见 [Codex 续接说明](references/codex-resume.md)。该功能默认关闭，只在用户要求时配置。
 
 ## 验证与维护
 

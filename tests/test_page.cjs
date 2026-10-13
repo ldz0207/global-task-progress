@@ -11,7 +11,7 @@ function load(store = new Map()) {
   const context = vm.createContext({
     localStorage: {getItem: key => store.get(key), setItem: (key, value) => store.set(key, value)},
   });
-  return vm.runInContext(definitions + '\n({compareRows,prefs,pinned,savePrefs,pct,count,eta,normalizeRefreshSeconds,staleTask,phases,rate,taskExpanded,setTaskExpanded,setAllTasksExpanded,normalizeOrder,orderedRows,moveNeighbors,moveTask,summaryStats,compactStamp,briefAlert,summaryCount,summaryPercent,splitStages,completedStagesExpanded,setCompletedStagesExpanded,overviewCounts})', context);
+  return vm.runInContext(definitions + '\n({codexSummary,compareRows,prefs,pinned,savePrefs,pct,count,eta,normalizeRefreshSeconds,staleTask,phases,rate,taskExpanded,setTaskExpanded,setAllTasksExpanded,normalizeOrder,orderedRows,moveNeighbors,moveTask,summaryStats,compactStamp,briefAlert,summaryCount,summaryPercent,splitStages,completedStagesExpanded,setCompletedStagesExpanded,overviewCounts})', context);
 }
 const store = new Map();
 const page = load(store);
@@ -19,6 +19,15 @@ const row = (id, status, done, updated, title = id) => ({id, task:{task_id:id,st
 const running = row('run','running',8,200,'乙');
 const attention = row('check','attention',2,100,'甲');
 let checks = 0;
+assert.equal(page.codexSummary(undefined).visible,false);checks++;
+const codexReady={enabled:true,app_online:true,pending_count:2,running_count:3,monitor_status:'running',operation:{status:'idle'}};
+assert.equal(page.codexSummary(codexReady).disabled,false);checks++;
+assert(page.codexSummary(codexReady).text.includes('待恢复 2 个'));checks++;
+assert.equal(page.codexSummary({...codexReady,pending_count:0}).disabled,true);checks++;
+assert.equal(page.codexSummary({...codexReady,app_online:false}).disabled,true);checks++;
+assert.equal(page.codexSummary({...codexReady,monitor_status:'error'}).disabled,true);checks++;
+assert.equal(page.codexSummary({...codexReady,operation:{status:'running'}}).disabled,true);checks++;
+assert.equal(page.codexSummary({...codexReady,operation:{status:'running'}}).button,'正在续接…');checks++;
 for (const mode of ['updated','attention','progress','name','manual']) {
   page.prefs.sort = mode;
   page.pinned.add('run');
