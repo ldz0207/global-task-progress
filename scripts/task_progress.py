@@ -303,7 +303,7 @@ def measured_rate(samples, stamp, done):
 
 
 class Reporter:
-    def __init__(self, task_id, title, state=DEFAULT, *, auto_start=True, flush_interval=1, port=None):
+    def __init__(self, task_id, title, state=DEFAULT, *, auto_start=True, flush_interval=1, port=None, codex_thread_id=None):
         task_id_check(task_id)
         if not numeric(flush_interval) or not 0 <= flush_interval <= 2:
             raise ValueError("flush_interval 必须在0至2秒之间")
@@ -311,6 +311,8 @@ class Reporter:
         self.port = resolve_port(self.state, port)
         self.url = service_url(self.port)
         self.task_id, self.title = task_id, title
+        from codex_names import current_conversation
+        self.codex_thread_id = current_conversation(codex_thread_id)
         self.path = self.state / "任务" / (task_id + ".json")
         self.lock_path = self.state / "锁" / (task_id + ".lock")
         self.lock = threading.RLock()
@@ -429,6 +431,8 @@ class Reporter:
                 eta_basis="仅估计当前阶段，按近期实际增量更新", message=message,
                 updated_ts=stamp, updated_at=now(), pid=os.getpid(),
             )
+            if self.codex_thread_id:
+                value.setdefault("codex_thread_id", self.codex_thread_id)
             atomic(self.path, value)
 
     def stop(self, status, message=""):
@@ -479,7 +483,7 @@ class Reporter:
             raise RuntimeError("进度心跳写入失败") from errors[0]
 
 
-def register_source(task_id, title, path, state=DEFAULT, *, port=None):
+def register_source(task_id, title, path, state=DEFAULT, *, port=None, codex_thread_id=None):
     task_id_check(task_id)
     state = state_path(state)
     path = Path(path)
@@ -487,10 +491,14 @@ def register_source(task_id, title, path, state=DEFAULT, *, port=None):
         raise ValueError("外部 JSON 必须使用绝对路径")
     if (state / "任务" / (task_id + ".json")).exists():
         raise ValueError("相同 ID 已有本地记录，不能同时注册第二个写入来源")
+    from codex_names import current_conversation
+    thread_id = current_conversation(codex_thread_id)
     with file_lock(state / "注册.lock"):
         target = state / "外部来源.json"
         value = read(target) if target.exists() else {}
         value[task_id] = {"task_id": task_id, "title": title, "path": str(path)}
+        if thread_id:
+            value[task_id]["codex_thread_id"] = thread_id
         atomic(target, value)
     ensure(state, port)
 
@@ -553,21 +561,66 @@ def snapshot(state):
             path = Path(source["path"])
             value = read(path)
             value.update(task_id=task_id, title=source["title"], external=True)
+            if source.get("codex_thread_id"):
+                value["codex_thread_id"] = source["codex_thread_id"]
             rows[task_id] = normalized(value, stamp, path.stat().st_mtime)
         except Exception as error:
             rows[task_id] = {"task_id": task_id, "title": source["title"], "status": "error", "message": "外部来源无法读取：" + str(error), "done": None, "total": None, "speed": None, "eta_seconds": None}
+            if source.get("codex_thread_id"):
+                rows[task_id]["codex_thread_id"] = source["codex_thread_id"]
     return sorted(rows.values(), key=lambda row: (row.get("status") in {"complete", "failed", "cancelled", "idle"}, -float(row.get("updated_ts") or 0)))
 
 
-def serve(state, port=None):
+def codex_settings(state):
+    path = Path(state) / "服务配置.json"
+    value = read(path) if path.exists() else {}
+    return value.get("codex_resume", {})
+
+
+def configure_codex(state, enabled, codex_home=None):
     state = state_path(state)
-    port = resolve_port(state, port)
-    guard_port_change(state, port)
-    state.mkdir(parents=True, exist_ok=True)
+    with file_lock(state / "启动.lock"):
+        path = state / "服务配置.json"
+        value = read(path) if path.exists() else {"identity": IDENTITY, "port": resolve_port(state)}
+        if value.get("identity") != IDENTITY:
+            raise ValueError("服务配置身份不匹配")
+        settings = {**value.get("codex_resume", {}), "enabled": bool(enabled)}
+        if codex_home is not None:
+            settings["codex_home"] = str(Path(codex_home).resolve())
+        atomic(path, {**value, "codex_resume": settings})
+        return settings
+
+
+def open_codex_conversation(thread_id):
+    from codex_names import conversation_id
+    thread_id = conversation_id(thread_id)
+    if not thread_id:
+        raise ValueError("缺少所属 Codex 对话")
+    if os.name != "nt":
+        raise RuntimeError("看板直接打开对话当前支持 Windows Codex 桌面版")
+    os.startfile("codex://threads/" + thread_id)
+
+
+def progress_handler(state, port, resume, conversations=None, open_conversation=None):
+    state = state_path(state)
+    if conversations is None:
+        from codex_names import TaskConversations
+        conversations = TaskConversations(codex_settings(state).get("codex_home"))
+    open_conversation = open_conversation or open_codex_conversation
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
+
+        def reply(self, value, code=200):
+            raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
 
         def do_GET(self):
             if self.headers.get("Host") not in allowed_hosts(port):
@@ -581,7 +634,7 @@ def serve(state, port=None):
                 content_type = "application/json"
             elif self.path == "/api/tasks":
                 try:
-                    value = {"tasks": snapshot(state), "observed_at": now(), "updated_at": now()}
+                    value = {"tasks": conversations.enrich(snapshot(state)), "observed_at": now(), "updated_at": now(), "codex": resume.snapshot()}
                     raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
                 except Exception:
                     self.send_error(503, "Cannot read progress sources")
@@ -598,6 +651,62 @@ def serve(state, port=None):
             self.end_headers()
             self.wfile.write(raw)
 
+        def do_POST(self):
+            if self.headers.get("Host") not in allowed_hosts(port):
+                self.send_error(403)
+                return
+            origin = self.headers.get("Origin")
+            if origin and origin not in {"http://" + host for host in allowed_hosts(port)}:
+                self.send_error(403)
+                return
+            if self.path not in {"/api/codex/resume", "/api/codex/open"}:
+                self.send_error(404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 4096:
+                    raise ValueError("请求长度无效")
+                body = json.loads(self.rfile.read(length))
+                fields = {"token", "thread_id"} if self.path == "/api/codex/open" else {"token"}
+                if not isinstance(body, dict) or set(body) != fields:
+                    raise ValueError("请求格式无效")
+                if self.path == "/api/codex/open":
+                    resume.check_token(body["token"])
+                    from codex_names import conversation_id
+                    thread_id = conversation_id(body["thread_id"])
+                    known = {task["codex_conversation"]["id"] for task in conversations.enrich(snapshot(state))}
+                    if not thread_id or thread_id not in known:
+                        raise ValueError("该对话没有关联到看板任务")
+                    open_conversation(thread_id)
+                    self.reply({"requested": True, "thread_id": thread_id}, 202)
+                else:
+                    self.reply(resume.request(body["token"]), 202)
+            except PermissionError as error:
+                self.reply({"error": str(error)}, 403)
+            except (ValueError, TypeError) as error:
+                self.reply({"error": str(error)}, 400)
+            except RuntimeError as error:
+                self.reply({"error": str(error)}, 409)
+            except OSError:
+                self.reply({"error": "无法打开 Codex；请检查桌面应用安装及系统链接关联。"}, 503)
+
+    return Handler
+
+
+def serve(state, port=None):
+    state = state_path(state)
+    port = resolve_port(state, port)
+    guard_port_change(state, port)
+    state.mkdir(parents=True, exist_ok=True)
+    from codex_resume import ResumeManager
+    reporter = Reporter("codex-resume-dispatch", "Codex 对话续接", state, auto_start=False, port=port, codex_thread_id="")
+    def report(operation):
+        status = "paused" if operation["status"] == "attention" else operation["status"]
+        reporter.update(operation.get("stage", "核对并继续"), operation.get("done", 0), operation.get("total"),
+                        operation.get("message", ""), status=status, unit="个",
+                        restart_reason="用户点击看板续接" if operation.get("total") is None else None)
+    resume = ResumeManager(state, codex_settings(state), progress=report)
+    Handler = progress_handler(state, port, resume)
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler, bind_and_activate=False)
     try:
         if os.name == "nt":
@@ -610,18 +719,28 @@ def serve(state, port=None):
         raise
     save_port(state, port)
     atomic(state / "服务状态.json", {"identity": IDENTITY, "port": port, "pid": os.getpid(), "script": str(Path(__file__).resolve()), "started_at": now()})
-    server.serve_forever()
+    resume.start()
+    try:
+        server.serve_forever()
+    finally:
+        resume.close()
+        server.server_close()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["ensure", "serve", "register", "ports", "configure"])
+    parser.add_argument("command", choices=["ensure", "serve", "register", "ports", "configure", "configure-codex"])
     parser.add_argument("--state-dir", type=Path, default=DEFAULT)
     parser.add_argument("--port", type=port_value)
     parser.add_argument("--scan-start", type=port_value, default=PORT)
     parser.add_argument("--task-id")
     parser.add_argument("--title")
     parser.add_argument("--file", type=Path)
+    parser.add_argument("--codex-home", type=Path)
+    parser.add_argument("--codex-thread-id", help="外部进度对应的完整 Codex 对话 ID；默认使用 CODEX_THREAD_ID")
+    codex = parser.add_mutually_exclusive_group()
+    codex.add_argument("--enable-codex", action="store_true")
+    codex.add_argument("--disable-codex", action="store_true")
     args = parser.parse_args()
     if args.command == "serve":
         serve(args.state_dir, args.port)
@@ -634,10 +753,14 @@ def main():
         if args.port is None:
             parser.error("configure 需要 --port，由用户选择端口")
         print(json.dumps(configure_port(args.state_dir, args.port), ensure_ascii=False, indent=2))
+    elif args.command == "configure-codex":
+        if not (args.enable_codex or args.disable_codex):
+            parser.error("configure-codex 需要 --enable-codex 或 --disable-codex")
+        print(json.dumps(configure_codex(args.state_dir, args.enable_codex, args.codex_home), ensure_ascii=False, indent=2))
     else:
         if not all([args.task_id, args.title, args.file]):
             parser.error("register 需要 --task-id、--title 和 --file")
-        register_source(args.task_id, args.title, args.file, args.state_dir, port=args.port)
+        register_source(args.task_id, args.title, args.file, args.state_dir, port=args.port, codex_thread_id=args.codex_thread_id)
 
 
 if __name__ == "__main__":

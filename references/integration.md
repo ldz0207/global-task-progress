@@ -34,6 +34,18 @@ r.update("发布", done=1, total=1, status="complete", unit="项")
 
 让 worker 脱离网页生命周期。Windows 可用 `Start-Process -WindowStyle Hidden`，指定既有 Python、绝对脚本路径、D 盘工作目录和日志目录；进程创建返回不代表任务成功，必须核对新鲜进度、实际进程和工作结果。不要为查看进度另起业务服务，不自动换随机端口；已选择的进度端口统一复用。
 
+## 任务所属 Codex 对话
+
+`Reporter` 默认将 `CODEX_THREAD_ID` 保存为任务 JSON 的 `codex_thread_id`。后台 worker 没有该变量时，构造 Reporter 时显式传入完整 UUID：`Reporter(..., codex_thread_id="完整对话UUID")`。外部来源注册同样支持 `register_source(..., codex_thread_id=...)` 和 CLI `register --codex-thread-id ...`，注册信息优先于外部 JSON 的关联字段。传入空字符串可让跨对话的全局服务或其他应用任务不自动绑定当前聊天。原任务已有绑定时 Reporter 保留它。
+
+`/api/tasks` 的每项增加 `codex_conversation={id,name,source,status}`，卡片在任务名称下显示「Codex 对话：名称」。关联依赖稳定 UUID，用户改名后仍对应原聊天。名称来自本机 Codex 元数据，默认 `CODEX_HOME` 或用户目录的 `.codex`；已配置续接的 `codex_home` 优先。独立开启名称显示不需要启用续接。
+
+在Windows点击对话名称，网页向现有服务的 `/api/codex/open` 提交所显示的对话UUID，服务复用Host/Origin及临时token检查，并确认该UUID已关联到看板任务，再调用Codex已注册的 `codex://threads/<UUID>` 系统入口。只打开原对话，不发送消息或启动模型工作，也不要求开启续接记录器。使用系统原生链接处理器，不增加监控/跳转进程；网页保留进度和偏好。缺少关联的记录显示普通文字；打开失败时显示错误。接口接受成功代表系统已接收打开请求，实际显示需在Codex核验。
+
+缓存每10秒最多只读一次与任务相关的 ID/名称/默认标题，不读取消息历史，不调用模型，不增加后台进程/监控线程。由已有看板请求触发，页面关闭不为名称轮询；实际可见更新受页面刷新间隔影响，默认2秒刷新通常在10–12秒内跟随已落盘改名。缓存只保留有关联的名称，读取连接随查询关闭；数据库暂不可用时保留上次名称并提示尚未更新，进度照常返回。
+
+旧任务 ID 中包含完整 UUID 或唯一的8位 UUID 前缀时可只读补关联；不唯一、缺失或无匹配则显示「未记录所属对话」。其他旧记录仅在核实创建来源后补入完整 ID，并保持实际计数、状态及更新时间，不根据任务标题或 PID 猜测。
+
 ## 端口检测与用户选择
 
 ```powershell
