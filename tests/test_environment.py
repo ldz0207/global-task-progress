@@ -89,7 +89,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_incomplete_skill_package_is_rejected(self):
         actual = Path.is_file
-        for missing in ('progress_page.html', 'codex_resume.py', 'codex_desktop.py'):
+        for missing in ('progress_page.html', 'codex_resume.py', 'codex_desktop.py', 'codex_names.py'):
             with self.subTest(missing=missing):
                 def is_file(path):
                     return False if path.name == missing else actual(path)

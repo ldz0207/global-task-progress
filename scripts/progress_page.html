@@ -2,6 +2,7 @@
 :root{color-scheme:light;--ink:#24382e;--muted:#627267;--green:#196a4c;--line:#dbe4dd}*{box-sizing:border-box}[hidden]{display:none!important}
 body{font:15px/1.6 'Segoe UI','Microsoft YaHei',sans-serif;background:#f2f5f3;color:var(--ink);margin:0}main{max-width:1080px;margin:24px auto;padding:22px}
 h1{font-size:25px;margin:0}h2{font-size:18px;margin:0}p{margin:10px 0}a{color:var(--green)}small,.muted{color:var(--muted);font-size:12px}
+.conversation-name{overflow-wrap:anywhere}
 .headerline,.header-right,.current-heading,.taskhead{display:flex;align-items:center;justify-content:space-between;gap:14px}.header-right{gap:16px}.current-heading{margin:26px 0 12px}.current-heading h2{font-size:15px;font-weight:500;color:var(--muted)}
 button,select{font:inherit;font-size:13px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);padding:5px 10px;cursor:pointer}button[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:#fff}button:disabled{opacity:.4;cursor:default}
 button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #8fbfaa;outline-offset:3px}.live{font-size:12px;white-space:nowrap;color:var(--green)}.live:before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:6px}#connection.error{color:#9d352a}
@@ -29,6 +30,11 @@ function codexSummary(value){
  return {visible:c.enabled===true,busy,pending,disabled:busy||!c.app_online||pending===0||c.monitor_status==='error',
   button:busy?'正在续接…':'继续退出前的对话（'+pending+'）',
   text:c.monitor_status==='error'?(c.message||'记录器异常'):!c.app_online?'请先重新打开 Codex，再继续退出前的对话。':'正在运行 '+(Number(c.running_count)||0)+' 个 · 待恢复 '+pending+' 个'};
+}
+function conversationLine(p){
+ const c=p.codex_conversation||{},name=c.name||'',id=c.id||'';
+ const text=name?name+(c.status==='stale'?'（名称暂未更新）':''):id?'名称暂不可读取（'+id.slice(0,8)+'）':'未记录所属对话';
+ return '<p class="conversation-name muted" title="'+esc(id)+'">Codex 对话：<span>'+esc(text)+'</span></p>';
 }
 const stamp=s=>{if(!s)return '暂无更新';const d=new Date(s);return Number.isNaN(d.getTime())?'暂无更新':d.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+' 北京时间'};
 const duration=v=>{const s=num(v);if(s==null||s<0)return '等待速度测量';if(s===0)return '0 秒';if(s<60)return Math.ceil(s)+' 秒';if(s<3600)return Math.ceil(s/60)+' 分钟';return Math.floor(s/3600)+' 小时 '+Math.ceil(s%3600/60)+' 分钟'};
@@ -82,7 +88,7 @@ function stageTable(stages){return stages.length?'<div class="tablewrap"><table>
 function card(p){
  const s=status(p.status),n=summaryPercent(p),groups=splitStages(p),a=groups.visible,alert=briefAlert(p);const id=String(p.task_id||p.title||''),isPinned=pinned.has(id),expanded=taskExpanded(id);
  return '<article class="card" data-task-id="'+esc(p.task_id||'')+'"><div class="taskhead"><h2>'+esc(p.title||'后台任务')+'</h2><div class="taskactions"><span class="badge '+s+'">'+label(s)+'</span><button type="button" class="pin" data-pin="'+esc(id)+'" aria-pressed="'+isPinned+'" aria-label="'+(isPinned?'取消置顶':'置顶')+'：'+esc(p.title||'后台任务')+'">'+(isPinned?'★ 已置顶':'☆ 置顶')+'</button><span class="move-controls" role="group" aria-label="调整顺序：'+esc(p.title||'后台任务')+'"><button type="button" class="move" data-move="'+esc(id)+'" data-direction="up" aria-label="上移：'+esc(p.title||'后台任务')+'" title="上移">↑</button><button type="button" class="move" data-move="'+esc(id)+'" data-direction="down" aria-label="下移：'+esc(p.title||'后台任务')+'" title="下移">↓</button></span><button type="button" class="detail-toggle" data-detail="'+esc(id)+'" aria-expanded="'+expanded+'" aria-controls="'+esc(detailRegionId(id))+'" aria-label="'+(expanded?'收起详情':'展开详情')+'：'+esc(p.title||'后台任务')+'">'+(expanded?'收起':'详情')+'</button></div></div>'+
- '<p class="summary-hint">'+esc(p.stage||'等待进度')+(s==='running'&&n===100?' · 该阶段完成':'')+'</p><div class="countline"><strong>'+summaryCount(p)+'</strong>'+(n!=null?'<span>'+fmt(Number(n.toFixed(1)))+'% · 剩余 '+remaining(p)+'</span>':'')+'</div>'+(n!=null?bar(p):'')+summaryMetrics(p)+(alert?'<p class="alert-note">'+esc(alert)+'</p>':'')+
+ conversationLine(p)+'<p class="summary-hint">'+esc(p.stage||'等待进度')+(s==='running'&&n===100?' · 该阶段完成':'')+'</p><div class="countline"><strong>'+summaryCount(p)+'</strong>'+(n!=null?'<span>'+fmt(Number(n.toFixed(1)))+'% · 剩余 '+remaining(p)+'</span>':'')+'</div>'+(n!=null?bar(p):'')+summaryMetrics(p)+(alert?'<p class="alert-note">'+esc(alert)+'</p>':'')+
  stageTable(a)+
  (p.message?'<p class="message">'+esc(p.message)+'</p>':!a.length&&!groups.completed.length?'<p class="detail-empty">尚无阶段明细。</p>':'')+'</article>';
 }
