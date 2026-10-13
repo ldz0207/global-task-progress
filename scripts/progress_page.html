@@ -34,7 +34,9 @@ function codexSummary(value){
 function conversationLine(p){
  const c=p.codex_conversation||{},name=c.name||'',id=c.id||'';
  const text=name?name+(c.status==='stale'?'（名称暂未更新）':''):id?'名称暂不可读取（'+id.slice(0,8)+'）':'未记录所属对话';
- return '<p class="conversation-name muted" title="'+esc(id)+'">Codex 对话：<span>'+esc(text)+'</span></p>';
+ const valid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+ const content=valid?'<a href="codex://threads/'+encodeURIComponent(id)+'" data-codex-open="'+esc(id)+'" title="在 Codex 中打开此对话">'+esc(text)+'</a>':'<span>'+esc(text)+'</span>';
+ return '<p class="conversation-name muted" title="'+esc(id)+'">Codex 对话：'+content+'</p>';
 }
 const stamp=s=>{if(!s)return '暂无更新';const d=new Date(s);return Number.isNaN(d.getTime())?'暂无更新':d.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+' 北京时间'};
 const duration=v=>{const s=num(v);if(s==null||s<0)return '等待速度测量';if(s===0)return '0 秒';if(s<60)return Math.ceil(s)+' 秒';if(s<3600)return Math.ceil(s/60)+' 分钟';return Math.floor(s/3600)+' 小时 '+Math.ceil(s%3600/60)+' 分钟'};
@@ -210,7 +212,19 @@ function renderList(container,rows){
 const codexPanel=document.createElement('section');codexPanel.className='card';codexPanel.hidden=true;codexPanel.setAttribute('aria-label','Codex 对话续接');
 codexPanel.innerHTML='<div class="taskhead"><h2>Codex 对话续接</h2><button id="codexResume" type="button" disabled>继续退出前的对话（0）</button></div><p id="codexSummary" class="muted" role="status"></p><p id="codexOperation" class="message" role="status"></p><details class="stages" id="codexDetails"><summary>对话与续接结果</summary><div id="codexRows" class="message"></div></details>';
 el('overview').after(codexPanel);let codexToken=null;
+const navigationError=document.createElement('p');navigationError.hidden=true;navigationError.className='alert-note';navigationError.setAttribute('role','status');navigationError.id='codexNavigationError';el('overview').before(navigationError);
+let openingConversation=false;
+document.addEventListener('click',async event=>{
+ const link=event.target.closest('[data-codex-open]');if(!link)return;event.preventDefault();if(openingConversation)return;
+ openingConversation=true;navigationError.hidden=true;
+ try{
+  const response=await fetch('/api/codex/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:codexToken,thread_id:link.dataset.codexOpen})});
+  const value=await response.json();if(!response.ok)throw Error(value.error||'无法打开对话');
+ }catch(error){navigationError.textContent=error.message;navigationError.hidden=false;}
+ finally{openingConversation=false;}
+});
 function renderCodex(c){
+ codexToken=c?.token||null;
  const view=codexSummary(c);codexPanel.hidden=!view.visible;if(!view.visible)return;
  codexToken=c.token;el('codexResume').disabled=view.disabled;el('codexResume').textContent=view.button;
  el('codexSummary').textContent=view.text;

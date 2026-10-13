@@ -96,8 +96,8 @@ class HttpTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.manager=ResumeManager(Path(self.temp.name),{'enabled':False})
     def tearDown(self):self.manager.close();self.temp.cleanup()
-    def handler(self,path,headers=None,body=None):
-        cls=progress.progress_handler(Path(self.temp.name),8790,self.manager);h=cls.__new__(cls)
+    def handler(self,path,headers=None,body=None,opener=None):
+        cls=progress.progress_handler(Path(self.temp.name),8790,self.manager,open_conversation=opener);h=cls.__new__(cls)
         h.headers={'Host':'127.0.0.1:8790',**(headers or {})};h.path=path;h.codes=[]
         raw=json.dumps(body or {}).encode();h.rfile=io.BytesIO(raw);h.wfile=io.BytesIO();h.headers.setdefault('Content-Length',str(len(raw)))
         h.send_error=lambda code,*args:h.codes.append(code);h.send_response=lambda code:h.codes.append(code)
@@ -115,5 +115,46 @@ class HttpTests(unittest.TestCase):
         h=self.handler('/api/codex/resume',body={'token':self.manager.token,'prompt':'unexpected'});h.do_POST();self.assertEqual(h.codes,[400])
     def test_disabled_is_not_a_successful_action(self):
         h=self.handler('/api/codex/resume',body={'token':self.manager.token});h.do_POST();self.assertEqual(h.codes,[409])
+
+    def open_body(self):
+        thread_id='12345678-1234-1234-1234-123456789abc'
+        r=progress.Reporter('linked-task','关联任务',Path(self.temp.name),auto_start=False,codex_thread_id=thread_id)
+        r.update('工作',1,2)
+        return {'token':self.manager.token,'thread_id':thread_id}
+
+    def test_open_works_without_resume_and_never_sends_a_turn(self):
+        opened=[];body=self.open_body()
+        with patch.object(self.manager,'request') as request:
+            h=self.handler('/api/codex/open',body=body,opener=opened.append);h.do_POST()
+        self.assertEqual(h.codes,[202]);self.assertEqual(opened,[body['thread_id']]);request.assert_not_called()
+        self.assertIsNone(self.manager.sender)
+
+    def test_open_rejects_unassociated_thread(self):
+        opened=[];body=self.open_body();body['thread_id']='ffffffff-1234-1234-1234-123456789abc'
+        h=self.handler('/api/codex/open',body=body,opener=opened.append);h.do_POST()
+        self.assertEqual(h.codes,[400]);self.assertEqual(opened,[])
+
+    def test_open_reuses_host_origin_and_token_checks(self):
+        for headers,token in [({'Host':'foreign.invalid'},self.manager.token),({'Origin':'https://foreign.invalid'},self.manager.token),({},'wrong')]:
+            with self.subTest(headers=headers,token=token):
+                body=self.open_body();body['token']=token;opened=[]
+                h=self.handler('/api/codex/open',headers,body,opener=opened.append);h.do_POST()
+                self.assertEqual(h.codes,[403]);self.assertEqual(opened,[])
+
+    def test_open_rejects_invalid_id_and_extra_action_fields(self):
+        for change in [{'thread_id':'codex://settings'},{'prompt':'continue'}]:
+            body={**self.open_body(),**change};opened=[]
+            h=self.handler('/api/codex/open',body=body,opener=opened.append);h.do_POST()
+            self.assertEqual(h.codes,[400]);self.assertEqual(opened,[])
+
+    def test_open_reports_native_launch_failure(self):
+        def failed(_):raise OSError('not installed')
+        h=self.handler('/api/codex/open',body=self.open_body(),opener=failed);h.do_POST()
+        self.assertEqual(h.codes,[503]);self.assertIn('无法打开',json.loads(h.wfile.getvalue())['error'])
+
+    def test_native_open_uses_existing_codex_protocol_only(self):
+        with patch.object(progress.os,'name','nt'),patch.object(progress.os,'startfile',create=True) as launch:
+            progress.open_codex_conversation('12345678-1234-1234-1234-123456789abc')
+            launch.assert_called_once_with('codex://threads/12345678-1234-1234-1234-123456789abc')
 
 if __name__=='__main__':unittest.main()

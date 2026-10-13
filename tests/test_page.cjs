@@ -24,6 +24,12 @@ assert(page.conversationLine({codex_conversation:{name:'<img onerror="bad">',sta
 assert(page.conversationLine({codex_conversation:{name:'旧名称',status:'stale'}}).includes('名称暂未更新'));checks++;
 assert(page.conversationLine({}).includes('未记录所属对话'));checks++;
 assert(page.conversationLine({codex_conversation:{id:'12345678-0000'}}).includes('12345678'));checks++;
+const conversationId='12345678-1234-1234-1234-123456789abc';
+const linkedLine=page.conversationLine({codex_conversation:{id:conversationId,name:'当前名称',status:'linked'}});
+assert(linkedLine.includes('href="codex://threads/'+conversationId+'"'));checks++;
+assert(linkedLine.includes('data-codex-open="'+conversationId+'"'));checks++;
+assert(!page.conversationLine({codex_conversation:{id:'javascript:alert(1)',name:'坏链接'}}).includes('<a '));checks++;
+assert(!page.conversationLine({}).includes('data-codex-open'));checks++;
 assert.equal(page.codexSummary(undefined).visible,false);checks++;
 const codexReady={enabled:true,app_online:true,pending_count:2,running_count:3,monitor_status:'running',operation:{status:'idle'}};
 assert.equal(page.codexSummary(codexReady).disabled,false);checks++;

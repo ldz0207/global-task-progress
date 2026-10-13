@@ -591,11 +591,22 @@ def configure_codex(state, enabled, codex_home=None):
         return settings
 
 
-def progress_handler(state, port, resume, conversations=None):
+def open_codex_conversation(thread_id):
+    from codex_names import conversation_id
+    thread_id = conversation_id(thread_id)
+    if not thread_id:
+        raise ValueError("缺少所属 Codex 对话")
+    if os.name != "nt":
+        raise RuntimeError("看板直接打开对话当前支持 Windows Codex 桌面版")
+    os.startfile("codex://threads/" + thread_id)
+
+
+def progress_handler(state, port, resume, conversations=None, open_conversation=None):
     state = state_path(state)
     if conversations is None:
         from codex_names import TaskConversations
         conversations = TaskConversations(codex_settings(state).get("codex_home"))
+    open_conversation = open_conversation or open_codex_conversation
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -648,7 +659,7 @@ def progress_handler(state, port, resume, conversations=None):
             if origin and origin not in {"http://" + host for host in allowed_hosts(port)}:
                 self.send_error(403)
                 return
-            if self.path != "/api/codex/resume":
+            if self.path not in {"/api/codex/resume", "/api/codex/open"}:
                 self.send_error(404)
                 return
             try:
@@ -656,15 +667,28 @@ def progress_handler(state, port, resume, conversations=None):
                 if not 0 < length <= 4096:
                     raise ValueError("请求长度无效")
                 body = json.loads(self.rfile.read(length))
-                if not isinstance(body, dict) or set(body) != {"token"}:
-                    raise ValueError("续接请求格式无效")
-                self.reply(resume.request(body["token"]), 202)
+                fields = {"token", "thread_id"} if self.path == "/api/codex/open" else {"token"}
+                if not isinstance(body, dict) or set(body) != fields:
+                    raise ValueError("请求格式无效")
+                if self.path == "/api/codex/open":
+                    resume.check_token(body["token"])
+                    from codex_names import conversation_id
+                    thread_id = conversation_id(body["thread_id"])
+                    known = {task["codex_conversation"]["id"] for task in conversations.enrich(snapshot(state))}
+                    if not thread_id or thread_id not in known:
+                        raise ValueError("该对话没有关联到看板任务")
+                    open_conversation(thread_id)
+                    self.reply({"requested": True, "thread_id": thread_id}, 202)
+                else:
+                    self.reply(resume.request(body["token"]), 202)
             except PermissionError as error:
                 self.reply({"error": str(error)}, 403)
             except (ValueError, TypeError) as error:
                 self.reply({"error": str(error)}, 400)
             except RuntimeError as error:
                 self.reply({"error": str(error)}, 409)
+            except OSError:
+                self.reply({"error": "无法打开 Codex；请检查桌面应用安装及系统链接关联。"}, 503)
 
     return Handler
 

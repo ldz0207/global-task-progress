@@ -106,8 +106,11 @@ class ResumeManager:
                     'active':[{'id':r['id'],'name':r.get('name') or r['id']} for r in self.record.get('active',[])],
                     'operation':copy.deepcopy(self.operation)}
 
+    def check_token(self,token):
+        if not isinstance(token,str) or not secrets.compare_digest(token,self.token):raise PermissionError('请从本机任务进度页面操作。')
+
     def request(self,token):
-        if not isinstance(token,str) or not secrets.compare_digest(token,self.token):raise PermissionError('请从本机进度页面点击续接。')
+        self.check_token(token)
         with self.lock:
             if not self.enabled:raise RuntimeError('Codex 记录功能尚未启用。')
             if self.sender and self.sender.is_alive():return self.snapshot()
