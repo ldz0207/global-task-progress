@@ -11,7 +11,7 @@ function load(store = new Map()) {
   const context = vm.createContext({
     localStorage: {getItem: key => store.get(key), setItem: (key, value) => store.set(key, value)},
   });
-  return vm.runInContext(definitions + '\n({conversationLine,codexSummary,compareRows,prefs,pinned,savePrefs,pct,count,eta,normalizeRefreshSeconds,staleTask,phases,rate,taskExpanded,setTaskExpanded,setAllTasksExpanded,normalizeOrder,orderedRows,moveNeighbors,moveTask,summaryStats,compactStamp,briefAlert,summaryCount,summaryPercent,splitStages,completedStagesExpanded,setCompletedStagesExpanded,overviewCounts})', context);
+  return vm.runInContext(definitions + '\n({conversationLine,codexSummary,compareRows,prefs,pinned,savePrefs,pct,count,eta,normalizeRefreshSeconds,staleTask,phases,rate,taskExpanded,setTaskExpanded,setAllTasksExpanded,normalizeOrder,orderedRows,moveNeighbors,moveTask,summaryStats,compactStamp,briefAlert,summaryCount,summaryPercent,splitStages,completedStagesExpanded,setCompletedStagesExpanded,overviewCounts,displayedCounts})', context);
 }
 const store = new Map();
 const page = load(store);
@@ -264,3 +264,8 @@ const nestedTotals=page.overviewCounts([{...stageFixture(40),status:'running'},{
 assert.equal(nestedTotals.total,2);assert.equal(nestedTotals.complete,1);assert.equal(nestedTotals.running,1);checks++;
 assert.equal(page.overviewCounts([]).total,0);assert.equal(page.overviewCounts([]).waiting,0);checks++;
 console.log(`Page behavior: ${checks} checks passed`);
+
+const baseline={counts:{total:12,running:2,waiting:3,complete:7},tasks:[{task_id:'old',status:'running'},{task_id:'service',status:'running',display_group:'background'}]};
+const expired=page.displayedCounts([{task_id:'old',status:'attention'},{task_id:'service',status:'attention',display_group:'background'}],baseline);
+assert.equal(expired.running,1);assert.equal(expired.waiting,4);assert.equal(baseline.counts.running,2);
+console.log('Summary expiry: 3 checks passed');

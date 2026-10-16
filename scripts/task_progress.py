@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -544,22 +545,58 @@ def normalized(value, stamp, fallback_ts=None):
     return value
 
 
-def snapshot(state):
+class TaskFiles:
+    """Reuse unchanged JSON within this service; writers keep their existing files."""
+    def __init__(self):
+        self.values = {}
+        self.lock = threading.Lock()
+
+    def read(self, path):
+        path = Path(path)
+        stat = path.stat()
+        version = (stat.st_mtime_ns, stat.st_size)
+        with self.lock:
+            previous = self.values.get(path)
+            if previous is None or previous[0] != version:
+                previous = (version, read(path))
+                self.values[path] = previous
+            return previous[1]
+
+
+SUMMARY_FIELDS = frozenset({
+    "task_id", "title", "stage", "done", "total", "remaining", "percent",
+    "status", "unit", "speed", "eta_seconds", "updated_ts", "updated_at",
+    "codex_thread_id", "external", "message",
+})
+ENDED = {"complete", "failed", "cancelled", "idle"}
+
+
+def snapshot(state, *, files=None, details=None):
     state, stamp = Path(state), time.time()
+    read_file = files.read if files is not None else read
+
+    def prepare(value, task_id):
+        if details is None or task_id in details:
+            return value
+        result = {key: value[key] for key in SUMMARY_FIELDS if key in value}
+        result["message"] = str(result.get("message") or "")[:180]
+        result["details_available"] = False
+        return result
+
     rows = {}
     for path in (state / "任务").glob("*.json"):
         try:
-            rows[path.stem] = normalized(read(path), stamp)
+            rows[path.stem] = normalized(prepare(read_file(path), path.stem), stamp)
         except Exception as error:
             rows[path.stem] = {"task_id": path.stem, "title": path.stem, "status": "error", "message": str(error), "done": None, "total": None, "speed": None, "eta_seconds": None}
-    sources = read(state / "外部来源.json") if (state / "外部来源.json").exists() else {}
+    sources = read_file(state / "外部来源.json") if (state / "外部来源.json").exists() else {}
     for task_id, source in sources.items():
         if task_id in rows:
             rows[task_id].update(status="error", speed=None, eta_seconds=None, message="相同任务 ID 有两个来源，请核对写入者")
             continue
         try:
             path = Path(source["path"])
-            value = read(path)
+            value = dict(prepare(read_file(path), task_id))
             value.update(task_id=task_id, title=source["title"], external=True)
             if source.get("codex_thread_id"):
                 value["codex_thread_id"] = source["codex_thread_id"]
@@ -569,6 +606,30 @@ def snapshot(state):
             if source.get("codex_thread_id"):
                 rows[task_id]["codex_thread_id"] = source["codex_thread_id"]
     return sorted(rows.values(), key=lambda row: (row.get("status") in {"complete", "failed", "cancelled", "idle"}, -float(row.get("updated_ts") or 0)))
+
+
+def dashboard_snapshot(state, files, query):
+    details = set(query.get("details", [""])[0].split(",")) - {""}
+    tasks = snapshot(state, files=files, details=details)
+    config_path = Path(state) / "服务配置.json"
+    config = files.read(config_path) if config_path.exists() else {}
+    background_ids = set(config.get("dashboard", {}).get("background_task_ids", []))
+    main = [task for task in tasks if task.get("task_id") not in background_ids]
+    history = [task for task in main if task.get("status") in ENDED]
+    background = [task for task in tasks if task.get("task_id") in background_ids]
+    visible = [task for task in main if task.get("status") not in ENDED]
+    if query.get("history") == ["1"]:
+        visible += history
+    if query.get("background") == ["1"]:
+        visible += [{**task, "display_group": "background"} for task in background]
+    return {
+        "tasks": visible, "history_count": len(history), "background_count": len(background),
+        "counts": {
+            "total": len(main), "running": sum(task.get("status") == "running" for task in main),
+            "waiting": sum(task.get("status") in {"paused", "attention", "error", "failed"} for task in main),
+            "complete": sum(task.get("status") == "complete" for task in main),
+        },
+    }
 
 
 def codex_settings(state):
@@ -603,6 +664,7 @@ def open_codex_conversation(thread_id):
 
 def progress_handler(state, port, resume, conversations=None, open_conversation=None):
     state = state_path(state)
+    files = TaskFiles()
     if conversations is None:
         from codex_names import TaskConversations
         conversations = TaskConversations(codex_settings(state).get("codex_home"))
@@ -632,9 +694,12 @@ def progress_handler(state, port, resume, conversations=None, open_conversation=
             elif self.path == "/api/health":
                 raw = json.dumps({"identity": IDENTITY, "port": port, "url": service_url(port), "pid": os.getpid(), "state_dir": str(state)}).encode()
                 content_type = "application/json"
-            elif self.path == "/api/tasks":
+            elif urlsplit(self.path).path == "/api/tasks":
                 try:
-                    value = {"tasks": conversations.enrich(snapshot(state)), "observed_at": now(), "updated_at": now(), "codex": resume.snapshot()}
+                    query = parse_qs(urlsplit(self.path).query)
+                    value = dashboard_snapshot(state, files, query) if query.get("view") == ["summary"] else {"tasks": snapshot(state, files=files)}
+                    value["tasks"] = conversations.enrich(value["tasks"])
+                    value.update(observed_at=now(), updated_at=now(), codex=resume.snapshot())
                     raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
                 except Exception:
                     self.send_error(503, "Cannot read progress sources")

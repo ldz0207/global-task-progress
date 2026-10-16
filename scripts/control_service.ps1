@@ -88,7 +88,11 @@ function Get-ProgressServiceStatus {
 function Test-ControlCommandLine {
     param([string[]]$Arguments,[string]$ScriptPath,[string]$Directory,[int]$SelectedPort)
     $index=1
-    while ($index -lt $Arguments.Count -and $Arguments[$index] -in @('-B','-u')) { $index++ }
+    while ($index -lt $Arguments.Count) {
+        if ($Arguments[$index] -in @('-B','-u','-Xutf8')) { $index++; continue }
+        if ($Arguments[$index] -eq '-X' -and $index+1 -lt $Arguments.Count -and $Arguments[$index+1] -eq 'utf8') { $index+=2; continue }
+        break
+    }
     if ($index+1 -ge $Arguments.Count -or -not (Test-ControlPath $Arguments[$index] $ScriptPath) -or $Arguments[$index+1] -ne 'serve') { return $false }
     $stateIndex=[Array]::IndexOf($Arguments,'--state-dir');$portIndex=[Array]::IndexOf($Arguments,'--port')
     return $stateIndex -gt $index -and $stateIndex+1 -lt $Arguments.Count -and $portIndex -gt $index -and $portIndex+1 -lt $Arguments.Count -and

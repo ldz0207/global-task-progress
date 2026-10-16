@@ -1,11 +1,13 @@
 ---
 name: task-progress
-description: 为持续运行、批量或多阶段任务提供统一的本机实时进度看板，显示实际完成量、阶段、速度和 ETA，关联 Codex 对话名称并轻量跟随改名；可选在同一看板手动续接退出前运行的 Windows Codex 对话。默认8790端口，保存用户所选端口，优先复用已有服务，日常从底层数据跟进。
+description: 为真正耗时、需要等待的主任务提供统一的本机实时进度看板，显示实际完成量、阶段、速度和 ETA，关联 Codex 对话名称；可选手动续接退出前运行的 Windows Codex 对话。默认8790端口，复用已有服务，详情、历史和后台记录按需读取。
 ---
 
 # 统一任务进度
 
 ## 开始前
+
+先判断任务粒度：只为真正耗时、需要等待的独立主任务登记卡片。同一主任务的读取、探测、检查等内部步骤作为阶段上报，短问答和单步操作直接在对话中反馈。后台常驻服务通过按需状态区查看，配置方法见 [接入说明](references/integration.md#后台记录与轻量页面读取)。
 
 首次安装、换设备或出现依赖错误时，先读 [references/environment.md](references/environment.md)。Windows 运行 `scripts/setup.ps1` 检测；用户已要求安装/首次启用时，用 `-InstallMissing` 补齐缺失的完整 Python 并复检。其他平台用 `scripts/check_environment.py`，按实际系统和当前安装授权补齐缺失项。复用已有解释器及业务环境，只安装真实缺项；Python 标准库不能当作 pip 包安装，Node、PyYAML、Celery、Redis不是运行必需项。检查通过后沿用报告中的解释器绝对路径；失败时先解决具体缺项或冲突，不开始 worker。
 
