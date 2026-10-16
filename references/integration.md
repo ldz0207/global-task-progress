@@ -10,7 +10,7 @@
 
 ```python
 import sys
-sys.path.insert(0, "/技能所在绝对路径/global-task-progress/scripts")
+sys.path.insert(0, "/技能所在绝对路径/task-progress/scripts")
 from task_progress import Reporter
 
 r = Reporter("my-export", "批量导出", state="/已有服务的绝对数据路径")

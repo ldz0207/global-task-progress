@@ -1,4 +1,4 @@
-# 统一任务进度 · global-task-progress
+# 统一任务进度 · task-progress
 
 可安装的 Agent Skill，把持续运行的批量任务接入一个本机看板。默认 **http://127.0.0.1:8790/**，启动前检测占用，用户可选择并保存喜欢的端口；后续任务统一复用实际入口。
 
@@ -20,13 +20,13 @@ Agent 日常跟进直接读取底层 API、任务记录、检查点、日志和�
 
 ## 安装
 
-下载或克隆本仓库，把根目录中的 `SKILL.md`、`agents/`、`scripts/`、`references/` 放到 Codex 技能目录的 `global-task-progress/` 内，例如：
+下载或克隆[本仓库](https://github.com/ldz0207/task-progress)，把根目录中的 `SKILL.md`、`agents/`、`scripts/`、`references/` 放到 Codex 技能目录的 `task-progress/` 内，例如：
 
 ```text
-C:/Users/<用户名>/.codex/skills/global-task-progress/
+C:/Users/<用户名>/.codex/skills/task-progress/
 ```
 
-重新打开会话后调用 `$global-task-progress`，或要求为批量任务接入统一实时进度。正式入口是 [SKILL.md](SKILL.md)。其他支持 `SKILL.md` 的工具可使用相同目录结构，但其自动发现行为需在对应工具中核验。
+重新打开会话后调用 `$task-progress`，或要求为批量任务接入统一实时进度。正式入口是 [SKILL.md](SKILL.md)。其他支持 `SKILL.md` 的工具可使用相同目录结构，但其自动发现行为需在对应工具中核验。
 
 首次启用先检查环境。Windows 可以从技能根目录运行：
 

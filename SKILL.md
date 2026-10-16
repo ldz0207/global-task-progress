@@ -1,5 +1,5 @@
 ---
-name: global-task-progress
+name: task-progress
 description: 为持续运行、批量或多阶段任务提供统一的本机实时进度看板，显示实际完成量、阶段、速度和 ETA，关联 Codex 对话名称并轻量跟随改名；可选在同一看板手动续接退出前运行的 Windows Codex 对话。默认8790端口，保存用户所选端口，优先复用已有服务，日常从底层数据跟进。
 ---
 
